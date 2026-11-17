@@ -443,6 +443,11 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
                 if (currentInputMode != InputMode.T9_ES && currentInputMode != InputMode.T9_EN) {
                     return false
                 }
+                val h = height.toFloat()
+                if (h > 0 && (ev.y / (h / 4f)).toInt() >= 3) {
+                    // Row 3 (*, 0, #) has its own dedicated trackpad and symbol popup touch handlers!
+                    return false
+                }
                 when (ev.actionMasked) {
                     MotionEvent.ACTION_DOWN -> {
                         startX = ev.x
@@ -456,6 +461,9 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
                         return false
                     }
                     MotionEvent.ACTION_MOVE -> {
+                        if (h > 0 && (startY / (h / 4f)).toInt() >= 3) {
+                            return false
+                        }
                         val dist = kotlin.math.hypot(ev.x - startX, ev.y - startY)
                         if (dist > dpToPx(18f)) {
                             isSwiping = true
@@ -668,22 +676,25 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
             showSymbolPopupOverlay()
         }
 
-        hashKey.setOnTouchListener { _, event ->
+        hashKey.setOnTouchListener { v, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     isLongPressActive = false
-                    hashKey.isPressed = true
-                    repeatHandler.postDelayed(longPressRunnable, 220L)
+                    v.isPressed = true
+                    v.parent?.requestDisallowInterceptTouchEvent(true)
+                    repeatHandler.removeCallbacks(longPressRunnable)
+                    repeatHandler.postDelayed(longPressRunnable, 320L)
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
                     if (isLongPressActive) {
+                        v.parent?.requestDisallowInterceptTouchEvent(true)
                         updateSymbolPopupSelection(event.rawX)
                     }
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    hashKey.isPressed = false
+                    v.isPressed = false
                     repeatHandler.removeCallbacks(longPressRunnable)
                     if (isLongPressActive) {
                         val selected = commitSymbolPopupSelection()
@@ -695,13 +706,14 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
                             listener?.onSymbolSelected(selected)
                         }
                     } else {
+                        // Quick tap on #: inserts '#' directly into text!
                         performHaptic()
-                        showSymbolStrip()
+                        listener?.onSymbolSelected("#")
                     }
                     true
                 }
                 MotionEvent.ACTION_CANCEL -> {
-                    hashKey.isPressed = false
+                    v.isPressed = false
                     repeatHandler.removeCallbacks(longPressRunnable)
                     hideSymbolPopupOverlay()
                     true
@@ -719,21 +731,23 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
         var isLongPress = false
 
         val longPressRunnable = Runnable {
-            isLongPress = true
-            performHaptic()
-            listener?.onZeroLongPress()
+            if (!isDraggingCursor) {
+                isLongPress = true
+                performStrongHaptic()
+            }
         }
 
-        zeroKey.setOnTouchListener { _, event ->
+        zeroKey.setOnTouchListener { v, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     downX = event.x
                     lastX = event.x
                     isDraggingCursor = false
                     isLongPress = false
-                    zeroKey.isPressed = true
-                    zeroKey.parent?.requestDisallowInterceptTouchEvent(true)
-                    repeatHandler.postDelayed(longPressRunnable, 400L)
+                    v.isPressed = true
+                    v.parent?.requestDisallowInterceptTouchEvent(true)
+                    repeatHandler.removeCallbacks(longPressRunnable)
+                    repeatHandler.postDelayed(longPressRunnable, 550L)
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
@@ -741,7 +755,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
                     if (abs(totalDx) > dpToPx(12f)) {
                         repeatHandler.removeCallbacks(longPressRunnable)
                         isDraggingCursor = true
-                        zeroKey.parent?.requestDisallowInterceptTouchEvent(true)
+                        v.parent?.requestDisallowInterceptTouchEvent(true)
                         val stepDx = event.x - lastX
                         val stepThreshold = dpToPx(11f)
                         if (abs(stepDx) >= stepThreshold) {
@@ -754,16 +768,23 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    zeroKey.isPressed = false
+                    v.isPressed = false
                     repeatHandler.removeCallbacks(longPressRunnable)
-                    if (!isDraggingCursor && !isLongPress) {
+                    if (isDraggingCursor) {
+                        // Dragged cursor: do NOT commit space or 0
+                    } else if (isLongPress) {
+                        // Held without moving: commit '0'
+                        performStrongHaptic()
+                        listener?.onZeroLongPress()
+                    } else {
+                        // Quick tap: commit space (or 0 if in numeric mode)
                         performHaptic()
                         listener?.onZeroKey()
                     }
                     true
                 }
                 MotionEvent.ACTION_CANCEL -> {
-                    zeroKey.isPressed = false
+                    v.isPressed = false
                     repeatHandler.removeCallbacks(longPressRunnable)
                     true
                 }
