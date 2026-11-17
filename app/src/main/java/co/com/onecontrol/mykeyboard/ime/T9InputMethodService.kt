@@ -350,11 +350,8 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
     }
 
     override fun onSwitchImeRequested() {
-        val switched = switchToPreviousInputMethod()
-        if (!switched) {
-            val imm = getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager
-            imm?.showInputMethodPicker()
-        }
+        val imm = getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager
+        imm?.showInputMethodPicker()
     }
 
     override fun onShowImePickerRequested() {

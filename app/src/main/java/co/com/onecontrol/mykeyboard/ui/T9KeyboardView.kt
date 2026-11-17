@@ -16,6 +16,8 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
+import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -29,7 +31,7 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 
 @SuppressLint("ClickableViewAccessibility")
-class T9KeyboardView(context: Context) : LinearLayout(context) {
+class T9KeyboardView(context: Context) : FrameLayout(context) {
 
     interface Listener {
         fun onDigitKey(digit: Char)
@@ -56,14 +58,21 @@ class T9KeyboardView(context: Context) : LinearLayout(context) {
     private var hapticStrength: Int = KeyboardConfig.DEFAULT_HAPTIC_STRENGTH
     private var keyHeightDp: Int = KeyboardConfig.DEFAULT_KEY_HEIGHT_DP
 
+    private val mainLayout: LinearLayout
     private val suggestionContainer: LinearLayout
     private val suggestionScroll: HorizontalScrollView
     private val statusBadge: TextView
+    private val emojiButton: TextView
     private val switchImeButton: TextView
     private val resizeButton: TextView
     private val enterButton: TextView
     private val langButton: TextView
     private val backspaceButton: TextView
+
+    // Hold & Slide popup for *
+    private val symbolPopupOverlay: LinearLayout
+    private val symbolPopupChips = mutableListOf<TextView>()
+    private var popupSelectedIndex = 0
 
     private val keyViews = mutableListOf<View>()
     private val actionButtons = mutableListOf<View>()
@@ -108,26 +117,33 @@ class T9KeyboardView(context: Context) : LinearLayout(context) {
     })
 
     init {
-        orientation = VERTICAL
-        setPadding(dpToPx(6f), dpToPx(6f), dpToPx(6f), dpToPx(12f))
         layoutParams = LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
         )
 
+        mainLayout = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dpToPx(6f), dpToPx(6f), dpToPx(6f), dpToPx(12f))
+            layoutParams = LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
+
         // 1. Top Suggestion + Control Bar
         val topBar = LinearLayout(context).apply {
-            orientation = HORIZONTAL
+            orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dpToPx(2f), 0, dpToPx(2f), dpToPx(5f))
         }
 
         suggestionScroll = HorizontalScrollView(context).apply {
             isHorizontalScrollBarEnabled = false
-            layoutParams = LayoutParams(0, dpToPx(34f), 1f)
+            layoutParams = LinearLayout.LayoutParams(0, dpToPx(34f), 1f)
         }
         suggestionContainer = LinearLayout(context).apply {
-            orientation = HORIZONTAL
+            orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
         suggestionScroll.addView(suggestionContainer)
@@ -142,12 +158,30 @@ class T9KeyboardView(context: Context) : LinearLayout(context) {
         }
         topBar.addView(statusBadge, marginEndParams(4))
 
-        // Switch to SwiftKey / other installed IME button
-        switchImeButton = createTopChip("⌨").apply {
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+        // Direct Emoji button
+        emojiButton = createTopChip("😊").apply {
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
             setOnClickListener {
                 performHaptic()
-                listener?.onSwitchImeRequested()
+                showEmojiStrip()
+            }
+        }
+        topBar.addView(emojiButton, marginEndParams(4))
+
+        // Switch to SwiftKey / other installed IME button
+        val isSwiftKey = try {
+            val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+            imm?.enabledInputMethodList?.any { it.packageName.contains("swiftkey", ignoreCase = true) } == true
+        } catch (_: Exception) {
+            false
+        }
+        val imeLabel = if (isSwiftKey) "⌨ SwiftKey" else "⌨ Cambiar"
+
+        switchImeButton = createTopChip(imeLabel).apply {
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            setOnClickListener {
+                performHaptic()
+                listener?.onShowImePickerRequested()
             }
             setOnLongClickListener {
                 performHaptic()
@@ -167,32 +201,32 @@ class T9KeyboardView(context: Context) : LinearLayout(context) {
         }
         topBar.addView(resizeButton)
 
-        addView(topBar)
+        mainLayout.addView(topBar)
 
         // 2. Main Body: Left 3x4 numeric grid + Right action column
         val body = LinearLayout(context).apply {
-            orientation = HORIZONTAL
-            layoutParams = LayoutParams(
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
         }
 
         val leftGrid = LinearLayout(context).apply {
-            orientation = VERTICAL
-            layoutParams = LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 3f)
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 3f)
         }
 
         val rowsSpec = listOf(
-            listOf('1' to ".,?!", '2' to "ABC", '3' to "DEF"),
+            listOf('1' to ".,?!@", '2' to "ABC", '3' to "DEF"),
             listOf('4' to "GHI", '5' to "JKL", '6' to "MNOÑ"),
             listOf('7' to "PQRS", '8' to "TUV", '9' to "WXYZ")
         )
 
         rowsSpec.forEach { rowItems ->
             val row = LinearLayout(context).apply {
-                orientation = HORIZONTAL
-                layoutParams = LayoutParams(
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     dpToPx(keyHeightDp.toFloat())
                 ).apply {
@@ -205,7 +239,7 @@ class T9KeyboardView(context: Context) : LinearLayout(context) {
                     listener?.onDigitKey(digit)
                 })
                 keyViews.add(key)
-                row.addView(key, LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
+                row.addView(key, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
                     marginEnd = dpToPx(5f)
                 })
             }
@@ -215,23 +249,18 @@ class T9KeyboardView(context: Context) : LinearLayout(context) {
 
         // Bottom row: *, 0, #
         val bottomRow = LinearLayout(context).apply {
-            orientation = HORIZONTAL
-            layoutParams = LayoutParams(
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dpToPx(keyHeightDp.toFloat())
             )
         }
 
-        val starKey = createNumericKey("*", "Aa · ?!", onClick = {
-            performHaptic()
-            listener?.onStarKey()
-        }, onLongClick = {
-            performHaptic()
-            listener?.onStarLongPress()
-            true
-        })
+        // Key * with Hold & Slide Symbol Selection!
+        val starKey = createNumericKey("*", "Aa · @?!")
+        setupStarSlideToSelect(starKey)
         keyViews.add(starKey)
-        bottomRow.addView(starKey, LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
+        bottomRow.addView(starKey, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
             marginEnd = dpToPx(5f)
         })
 
@@ -244,7 +273,7 @@ class T9KeyboardView(context: Context) : LinearLayout(context) {
             true
         })
         keyViews.add(zeroKey)
-        bottomRow.addView(zeroKey, LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
+        bottomRow.addView(zeroKey, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
             marginEnd = dpToPx(5f)
         })
 
@@ -253,7 +282,7 @@ class T9KeyboardView(context: Context) : LinearLayout(context) {
             listener?.onHashKey()
         })
         keyViews.add(hashKey)
-        bottomRow.addView(hashKey, LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
+        bottomRow.addView(hashKey, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
             marginEnd = dpToPx(5f)
         })
 
@@ -263,8 +292,8 @@ class T9KeyboardView(context: Context) : LinearLayout(context) {
 
         // Right Action Column
         val rightCol = LinearLayout(context).apply {
-            orientation = VERTICAL
-            layoutParams = LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
         }
 
         backspaceButton = createActionKey("⌫").apply {
@@ -291,7 +320,7 @@ class T9KeyboardView(context: Context) : LinearLayout(context) {
             }
         }
         actionButtons.add(backspaceButton)
-        rightCol.addView(backspaceButton, LayoutParams(
+        rightCol.addView(backspaceButton, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
         ).apply {
             bottomMargin = dpToPx(5f)
@@ -305,7 +334,7 @@ class T9KeyboardView(context: Context) : LinearLayout(context) {
             }
         }
         actionButtons.add(langButton)
-        rightCol.addView(langButton, LayoutParams(
+        rightCol.addView(langButton, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
         ).apply {
             bottomMargin = dpToPx(5f)
@@ -318,12 +347,155 @@ class T9KeyboardView(context: Context) : LinearLayout(context) {
             }
         }
         actionButtons.add(enterButton)
-        rightCol.addView(enterButton, LayoutParams(
+        rightCol.addView(enterButton, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, 0, 2f
         ))
 
         body.addView(rightCol)
-        addView(body)
+        mainLayout.addView(body)
+        addView(mainLayout)
+
+        // 3. Hold & Slide Symbol Popup Overlay (Horizontal Floating Bar)
+        symbolPopupOverlay = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            visibility = View.GONE
+            elevation = dpToPx(16f).toFloat()
+            setPadding(dpToPx(6f), dpToPx(6f), dpToPx(6f), dpToPx(6f))
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#EE161A22"))
+                cornerRadius = dpToPx(14f).toFloat()
+                setStroke(dpToPx(1.5f), ContextCompat.getColor(context, R.color.kb_accent))
+            }
+            layoutParams = LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+            ).apply {
+                bottomMargin = dpToPx(60f)
+            }
+        }
+
+        T9KeyMap.POPUP_SYMBOLS.forEachIndexed { index, sym ->
+            val tv = TextView(context).apply {
+                text = sym
+                setTextColor(Color.WHITE)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, if (sym == "😊") 16f else 15f)
+                typeface = Typeface.DEFAULT_BOLD
+                gravity = Gravity.CENTER
+                includeFontPadding = false
+                setPadding(dpToPx(8f), dpToPx(6f), dpToPx(8f), dpToPx(6f))
+                background = GradientDrawable().apply {
+                    setColor(if (index == 0) ContextCompat.getColor(context, R.color.kb_accent) else Color.TRANSPARENT)
+                    cornerRadius = dpToPx(8f).toFloat()
+                }
+            }
+            symbolPopupChips.add(tv)
+            symbolPopupOverlay.addView(tv)
+        }
+        addView(symbolPopupOverlay)
+    }
+
+    private fun setupStarSlideToSelect(starKey: View) {
+        var isLongPressActive = false
+        val longPressRunnable = Runnable {
+            isLongPressActive = true
+            performHaptic()
+            showSymbolPopupOverlay()
+        }
+
+        starKey.setOnTouchListener { _, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    isLongPressActive = false
+                    starKey.isPressed = true
+                    repeatHandler.postDelayed(longPressRunnable, 220L)
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if (isLongPressActive) {
+                        updateSymbolPopupSelection(event.rawX)
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    starKey.isPressed = false
+                    repeatHandler.removeCallbacks(longPressRunnable)
+                    if (isLongPressActive) {
+                        val selected = commitSymbolPopupSelection()
+                        if (selected == "😊") {
+                            performHaptic()
+                            showEmojiStrip()
+                        } else if (selected != null) {
+                            performHaptic()
+                            listener?.onSymbolSelected(selected)
+                        }
+                    } else {
+                        performHaptic()
+                        listener?.onStarKey()
+                    }
+                    true
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    starKey.isPressed = false
+                    repeatHandler.removeCallbacks(longPressRunnable)
+                    hideSymbolPopupOverlay()
+                    true
+                }
+                else -> false
+            }
+        }
+    }
+
+    private fun showSymbolPopupOverlay() {
+        popupSelectedIndex = 0
+        updateChipHighlights()
+        symbolPopupOverlay.visibility = View.VISIBLE
+    }
+
+    private fun hideSymbolPopupOverlay() {
+        symbolPopupOverlay.visibility = View.GONE
+    }
+
+    private fun updateSymbolPopupSelection(rawX: Float) {
+        if (symbolPopupChips.isEmpty()) return
+        var bestIndex = 0
+        var minDistance = Float.MAX_VALUE
+
+        val loc = IntArray(2)
+        symbolPopupChips.forEachIndexed { i, chip ->
+            chip.getLocationOnScreen(loc)
+            val chipCenterX = loc[0] + chip.width / 2f
+            val dist = abs(rawX - chipCenterX)
+            if (dist < minDistance) {
+                minDistance = dist
+                bestIndex = i
+            }
+        }
+
+        if (bestIndex != popupSelectedIndex) {
+            popupSelectedIndex = bestIndex
+            performHaptic()
+            updateChipHighlights()
+        }
+    }
+
+    private fun updateChipHighlights() {
+        symbolPopupChips.forEachIndexed { i, chip ->
+            val bg = chip.background as? GradientDrawable ?: return@forEachIndexed
+            if (i == popupSelectedIndex) {
+                bg.setColor(ContextCompat.getColor(context, R.color.kb_accent))
+                chip.setTextColor(Color.WHITE)
+            } else {
+                bg.setColor(Color.TRANSPARENT)
+                chip.setTextColor(ContextCompat.getColor(context, R.color.kb_text_primary))
+            }
+        }
+    }
+
+    private fun commitSymbolPopupSelection(): String? {
+        hideSymbolPopupOverlay()
+        return symbolPopupChips.getOrNull(popupSelectedIndex)?.text?.toString()
     }
 
     override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
@@ -351,7 +523,7 @@ class T9KeyboardView(context: Context) : LinearLayout(context) {
         )
         val heightPx = dpToPx(keyHeightDp.toFloat())
         keypadRows.forEach { row ->
-            val lp = row.layoutParams as LayoutParams
+            val lp = row.layoutParams as LinearLayout.LayoutParams
             if (lp.height != heightPx) {
                 lp.height = heightPx
                 row.layoutParams = lp
@@ -404,7 +576,7 @@ class T9KeyboardView(context: Context) : LinearLayout(context) {
             suggestionContainer.addView(fallbackChip, marginEndParams(6))
         } else {
             val hint = TextView(context).apply {
-                text = "T9 · ⌨ Cambiar teclado"
+                text = "T9 · Mantén * para símbolos @"
                 setTextColor(ContextCompat.getColor(context, R.color.kb_text_secondary))
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f)
                 setPadding(dpToPx(6f), 0, dpToPx(6f), 0)
@@ -429,6 +601,18 @@ class T9KeyboardView(context: Context) : LinearLayout(context) {
         suggestionScroll.scrollTo(0, 0)
     }
 
+    fun showEmojiStrip() {
+        suggestionContainer.removeAllViews()
+        T9KeyMap.POPULAR_EMOJIS.forEach { emo ->
+            val chip = createSuggestionChip(emo, primary = false) {
+                performHaptic()
+                listener?.onSymbolSelected(emo)
+            }
+            suggestionContainer.addView(chip, marginEndParams(5))
+        }
+        suggestionScroll.scrollTo(0, 0)
+    }
+
     private fun performHaptic() {
         if (hapticStrength <= 0) return
         val constant = if (hapticStrength >= 65) {
@@ -443,11 +627,11 @@ class T9KeyboardView(context: Context) : LinearLayout(context) {
     private fun createNumericKey(
         mainLabel: String,
         subLabel: String,
-        onClick: () -> Unit,
+        onClick: (() -> Unit)? = null,
         onLongClick: (() -> Boolean)? = null
     ): View {
         return LinearLayout(context).apply {
-            orientation = VERTICAL
+            orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             setPadding(0, dpToPx(2f), 0, dpToPx(2f))
             background = createKeyDrawable(
@@ -478,7 +662,9 @@ class T9KeyboardView(context: Context) : LinearLayout(context) {
             addView(mainTv)
             addView(subTv)
 
-            setOnClickListener { onClick() }
+            if (onClick != null) {
+                setOnClickListener { onClick() }
+            }
             if (onLongClick != null) {
                 setOnLongClickListener { onLongClick() }
             }
@@ -577,8 +763,8 @@ class T9KeyboardView(context: Context) : LinearLayout(context) {
         }
     }
 
-    private fun marginEndParams(dp: Int): LayoutParams =
-        LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+    private fun marginEndParams(dp: Int): LinearLayout.LayoutParams =
+        LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
             marginEnd = dpToPx(dp.toFloat())
         }
 
