@@ -301,6 +301,23 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
         setInputMode(next, persist = true)
     }
 
+    override fun onTogglePredictiveMode() {
+        commitAllComposing()
+        returnToT9AfterWord = null
+        val nextMode = when (inputMode) {
+            InputMode.T9_ES, InputMode.T9_EN -> InputMode.MULTI_TAP
+            InputMode.MULTI_TAP -> lastT9LanguageMode
+            InputMode.NUMERIC -> lastT9LanguageMode
+        }
+        setInputMode(nextMode, persist = true)
+    }
+
+    override fun onModeSelected(mode: InputMode) {
+        commitAllComposing()
+        returnToT9AfterWord = null
+        setInputMode(mode, persist = true)
+    }
+
     override fun onBackspace() {
         val ic = currentInputConnection ?: return
         if ((inputMode == InputMode.T9_ES || inputMode == InputMode.T9_EN) && !t9Engine.isEmpty()) {

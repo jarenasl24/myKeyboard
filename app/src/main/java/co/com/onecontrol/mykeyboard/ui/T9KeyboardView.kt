@@ -56,12 +56,15 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
         fun onClipboardRequested()
         fun onGeneratePasswordRequested()
         fun onGifSelected(assetName: String, label: String)
+        fun onTogglePredictiveMode()
+        fun onModeSelected(mode: InputMode)
     }
 
     var listener: Listener? = null
 
     private var hapticStrength: Int = KeyboardConfig.DEFAULT_HAPTIC_STRENGTH
     private var keyHeightDp: Int = KeyboardConfig.DEFAULT_KEY_HEIGHT_DP
+    private var currentInputMode: InputMode = InputMode.T9_ES
 
     private val mainLayout: LinearLayout
     private val topBar: LinearLayout
@@ -75,7 +78,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
     private val switchImeButton: TextView
     private val resizeButton: TextView
     private val enterButton: TextView
-    private val langButton: TextView
+    private val modeButton: TextView
     private val backspaceButton: TextView
 
     // Hold & Slide popup for # (Symbols)
@@ -180,7 +183,12 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
         statusBadge = createTopChip("T9 ES", accent = true).apply {
             setOnClickListener {
                 performHaptic()
-                listener?.onStarLongPress()
+                listener?.onTogglePredictiveMode()
+            }
+            setOnLongClickListener {
+                performHaptic()
+                showModePickerStrip()
+                true
             }
         }
         topBar.addView(statusBadge, marginEndParams(4))
@@ -279,7 +287,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
             listener?.onStarKey()
         }, onLongClick = {
             performHaptic()
-            listener?.onStarLongPress()
+            listener?.onTogglePredictiveMode()
             true
         })
         keyViews.add(starKey)
@@ -343,15 +351,20 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
             bottomMargin = dpToPx(5f)
         })
 
-        langButton = createActionKey("ES / EN").apply {
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+        modeButton = createActionKey("ABC").apply {
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             setOnClickListener {
                 performHaptic()
+                listener?.onTogglePredictiveMode()
+            }
+            setOnLongClickListener {
+                performHaptic()
                 listener?.onQuickLanguageToggle()
+                true
             }
         }
-        actionButtons.add(langButton)
-        rightCol.addView(langButton, LinearLayout.LayoutParams(
+        actionButtons.add(modeButton)
+        rightCol.addView(modeButton, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
         ).apply {
             bottomMargin = dpToPx(5f)
@@ -656,13 +669,18 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
     fun isEmojiPanelVisible(): Boolean = emojiMediaPanel.visibility == View.VISIBLE
 
     fun updateState(mode: InputMode, caseMode: CaseMode) {
+        currentInputMode = mode
         statusBadge.text = "${mode.label} · ${caseMode.label}"
-        langButton.text = when (mode) {
-            InputMode.T9_ES -> "ES→EN"
-            InputMode.T9_EN -> "EN→ES"
-            InputMode.MULTI_TAP -> "ABC"
-            InputMode.NUMERIC -> "123"
+        val isMultiTap = (mode == InputMode.MULTI_TAP)
+        modeButton.text = when (mode) {
+            InputMode.T9_ES, InputMode.T9_EN -> "ABC"
+            InputMode.MULTI_TAP -> "T9"
+            InputMode.NUMERIC -> "T9"
         }
+        modeButton.setTextColor(
+            if (isMultiTap) ContextCompat.getColor(context, R.color.kb_accent)
+            else ContextCompat.getColor(context, R.color.kb_text_primary)
+        )
     }
 
     fun updateImeAction(imeOptions: Int) {
@@ -691,6 +709,13 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
                 }
                 suggestionContainer.addView(chip, marginEndParams(6))
             }
+            if (hasPendingDigits) {
+                val spellChip = createSuggestionChip("🔤 ABC", primary = false) {
+                    performHaptic()
+                    listener?.onFallbackMultiTapRequested()
+                }
+                suggestionContainer.addView(spellChip, marginEndParams(6))
+            }
         } else if (hasPendingDigits) {
             val fallbackChip = createSuggestionChip("➕ Deletrear palabra (ABC)", primary = true) {
                 performHaptic()
@@ -698,8 +723,13 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
             }
             suggestionContainer.addView(fallbackChip, marginEndParams(6))
         } else {
+            val hintText = if (currentInputMode == InputMode.MULTI_TAP) {
+                "Modo ABC (multitap) · Toca T9 para volver"
+            } else {
+                "T9 · Toca ABC para deletrear sin predicción"
+            }
             val hint = TextView(context).apply {
-                text = "T9 · Mantén # para símbolos @"
+                text = hintText
                 setTextColor(ContextCompat.getColor(context, R.color.kb_text_secondary))
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f)
                 setPadding(dpToPx(6f), 0, dpToPx(6f), 0)
@@ -708,6 +738,25 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
                 isSingleLine = true
             }
             suggestionContainer.addView(hint)
+        }
+        suggestionScroll.scrollTo(0, 0)
+    }
+
+    fun showModePickerStrip() {
+        suggestionContainer.removeAllViews()
+        val modes = listOf(
+            InputMode.T9_ES to "T9 Español",
+            InputMode.T9_EN to "T9 English",
+            InputMode.MULTI_TAP to "🔤 ABC Multi-tap",
+            InputMode.NUMERIC to "123 Números"
+        )
+        modes.forEach { (mode, label) ->
+            val isCurrent = (mode == currentInputMode)
+            val chip = createSuggestionChip(label, primary = isCurrent) {
+                performHaptic()
+                listener?.onModeSelected(mode)
+            }
+            suggestionContainer.addView(chip, marginEndParams(6))
         }
         suggestionScroll.scrollTo(0, 0)
     }
