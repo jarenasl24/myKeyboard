@@ -79,6 +79,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
     private val suggestionContainer: LinearLayout
     private val suggestionScroll: HorizontalScrollView
     private val utilityControlsLayout: LinearLayout
+    private val langPill: TextView
     private val expandButton: TextView
     private val statusBadge: TextView
     private val clipboardButton: TextView
@@ -168,6 +169,18 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
         suggestionScroll.addView(suggestionContainer)
         topBar.addView(suggestionScroll)
 
+        // Always-visible Language Pill (ES / EN)
+        langPill = createTopChip("ES").apply {
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(dpToPx(8f), dpToPx(5f), dpToPx(8f), dpToPx(5f))
+            setOnClickListener {
+                performHaptic()
+                listener?.onQuickLanguageToggle()
+            }
+        }
+        topBar.addView(langPill, marginEndParams(4))
+
         // Expand / Collapse candidate grid button
         expandButton = createTopChip("▼").apply {
             visibility = View.GONE
@@ -214,7 +227,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
         statusBadge = createTopChip("T9 ES", accent = true).apply {
             setOnClickListener {
                 performHaptic()
-                listener?.onTogglePredictiveMode()
+                listener?.onQuickLanguageToggle()
             }
             setOnLongClickListener {
                 performHaptic()
@@ -551,11 +564,6 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
             setOnClickListener {
                 performHaptic()
                 listener?.onTogglePredictiveMode()
-            }
-            setOnLongClickListener {
-                performHaptic()
-                listener?.onQuickLanguageToggle()
-                true
             }
         }
         actionButtons.add(modeButton)
@@ -948,6 +956,16 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
     fun updateState(mode: InputMode, caseMode: CaseMode) {
         currentInputMode = mode
         statusBadge.text = "${mode.label} · ${caseMode.label}"
+
+        val isEnglish = (mode == InputMode.T9_EN)
+        langPill.text = if (isEnglish) "EN" else "ES"
+        langPill.setTextColor(if (isEnglish) Color.WHITE else ContextCompat.getColor(context, R.color.kb_accent))
+        langPill.background = GradientDrawable().apply {
+            setColor(if (isEnglish) Color.parseColor("#D35400") else ContextCompat.getColor(context, R.color.kb_key_bg))
+            cornerRadius = dpToPx(10f).toFloat()
+            setStroke(dpToPx(1.5f), if (isEnglish) Color.parseColor("#E67E22") else ContextCompat.getColor(context, R.color.kb_border))
+        }
+
         val isMultiTap = (mode == InputMode.MULTI_TAP)
         modeButton.text = when (mode) {
             InputMode.T9_ES, InputMode.T9_EN -> "ABC"
@@ -980,6 +998,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
     ) {
         lastSuggestions = suggestions
         suggestionContainer.removeAllViews()
+        langPill.visibility = View.VISIBLE
 
         if (hasPendingDigits) {
             // Typing mode: collapse utility buttons to give 100% of topBar to suggestions!
@@ -1056,11 +1075,13 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
     private fun prepareStripWithCloseChip(): TextView {
         utilityControlsLayout.visibility = View.GONE
         expandButton.visibility = View.GONE
+        langPill.visibility = View.GONE
         hideCandidateGrid()
         suggestionContainer.removeAllViews()
         val closeChip = createSuggestionChip("✕", primary = false) {
             performHaptic()
             utilityControlsLayout.visibility = View.VISIBLE
+            langPill.visibility = View.VISIBLE
             showSuggestions(emptyList(), false, "")
         }
         suggestionContainer.addView(closeChip, marginEndParams(6))
@@ -1070,8 +1091,8 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
     fun showModePickerStrip() {
         prepareStripWithCloseChip()
         val modes = listOf(
-            InputMode.T9_ES to "T9 Español",
-            InputMode.T9_EN to "T9 English",
+            InputMode.T9_ES to "🇪🇸 T9 Español",
+            InputMode.T9_EN to "🇬🇧 T9 English",
             InputMode.MULTI_TAP to "🔤 ABC Multi-tap",
             InputMode.NUMERIC to "123 Números"
         )
@@ -1080,6 +1101,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
             val chip = createSuggestionChip(label, primary = isCurrent) {
                 performHaptic()
                 utilityControlsLayout.visibility = View.VISIBLE
+                langPill.visibility = View.VISIBLE
                 listener?.onModeSelected(mode)
             }
             suggestionContainer.addView(chip, marginEndParams(6))

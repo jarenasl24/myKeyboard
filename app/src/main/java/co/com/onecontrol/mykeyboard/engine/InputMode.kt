@@ -9,7 +9,7 @@ enum class InputMode(val label: String) {
     NUMERIC("123");
 
     fun next(): InputMode = when (this) {
-        T9_ES -> T9_EN
+        T9_ES -> MULTI_TAP
         T9_EN -> MULTI_TAP
         MULTI_TAP -> NUMERIC
         NUMERIC -> T9_ES

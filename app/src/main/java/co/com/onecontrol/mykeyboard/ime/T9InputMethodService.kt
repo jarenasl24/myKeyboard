@@ -296,12 +296,11 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
     }
 
     override fun onQuickLanguageToggle() {
-        commitAllComposing()
         returnToT9AfterWord = null
         val next = when (inputMode) {
             InputMode.T9_ES -> InputMode.T9_EN
             InputMode.T9_EN -> InputMode.T9_ES
-            else -> lastT9LanguageMode
+            else -> if (lastT9LanguageMode == InputMode.T9_ES) InputMode.T9_EN else InputMode.T9_ES
         }
         setInputMode(next, persist = true)
     }

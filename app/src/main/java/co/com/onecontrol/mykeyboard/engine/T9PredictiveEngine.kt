@@ -30,8 +30,13 @@ class T9PredictiveEngine(
 
     fun getSuggestions(language: T9DictionaryTrie.Language, caseMode: CaseMode): List<String> {
         if (digitBuffer.isEmpty()) return emptyList()
-        return dictionary.query(language, digitBuffer.toString(), limit = 8)
-            .map { caseMode.applyToWord(it) }
+        val primary = dictionary.query(language, digitBuffer.toString(), limit = 8)
+        if (language == T9DictionaryTrie.Language.ES && primary.size < 4) {
+            val fallbackEn = dictionary.query(T9DictionaryTrie.Language.EN, digitBuffer.toString(), limit = 4)
+            val combined = (primary + fallbackEn).distinct().take(8)
+            return combined.map { caseMode.applyToWord(it) }
+        }
+        return primary.map { caseMode.applyToWord(it) }
     }
 
     fun getPrimarySuggestion(language: T9DictionaryTrie.Language, caseMode: CaseMode): String? {
