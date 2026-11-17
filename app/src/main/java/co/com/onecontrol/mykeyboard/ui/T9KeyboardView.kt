@@ -70,8 +70,13 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
     private val topBar: LinearLayout
     private val body: LinearLayout
     private val emojiMediaPanel: co.com.onecontrol.mykeyboard.ui.emoji.EmojiMediaPanelView
+    private val candidateGridPanel: LinearLayout
+    private val candidateGridScroll: ScrollView
+    private val candidateGridRowsContainer: LinearLayout
     private val suggestionContainer: LinearLayout
     private val suggestionScroll: HorizontalScrollView
+    private val utilityControlsLayout: LinearLayout
+    private val expandButton: TextView
     private val statusBadge: TextView
     private val clipboardButton: TextView
     private val emojiButton: TextView
@@ -80,6 +85,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
     private val enterButton: TextView
     private val modeButton: TextView
     private val backspaceButton: TextView
+    private var lastSuggestions: List<String> = emptyList()
 
     // Hold & Slide popup for # (Symbols)
     private val symbolPopupOverlay: LinearLayout
@@ -150,7 +156,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
 
         suggestionScroll = HorizontalScrollView(context).apply {
             isHorizontalScrollBarEnabled = false
-            layoutParams = LinearLayout.LayoutParams(0, dpToPx(38f), 1f)
+            layoutParams = LinearLayout.LayoutParams(0, dpToPx(42f), 1f)
         }
         suggestionContainer = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -158,6 +164,28 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
         }
         suggestionScroll.addView(suggestionContainer)
         topBar.addView(suggestionScroll)
+
+        // Expand / Collapse candidate grid button
+        expandButton = createTopChip("▼").apply {
+            visibility = View.GONE
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            setPadding(dpToPx(9f), dpToPx(6f), dpToPx(9f), dpToPx(6f))
+            setOnClickListener {
+                performHaptic()
+                if (isCandidateGridVisible()) {
+                    hideCandidateGrid()
+                } else {
+                    showCandidateGrid()
+                }
+            }
+        }
+        topBar.addView(expandButton, marginEndParams(4))
+
+        // Utility controls container (collapses when typing to give 100% space to suggestions)
+        utilityControlsLayout = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
 
         // Clipboard history button
         clipboardButton = createTopChip("📋").apply {
@@ -167,7 +195,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
                 listener?.onClipboardRequested()
             }
         }
-        topBar.addView(clipboardButton, marginEndParams(4))
+        utilityControlsLayout.addView(clipboardButton, marginEndParams(4))
 
         // Direct Emoji button
         emojiButton = createTopChip("😊").apply {
@@ -177,7 +205,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
                 showEmojiPanel()
             }
         }
-        topBar.addView(emojiButton, marginEndParams(4))
+        utilityControlsLayout.addView(emojiButton, marginEndParams(4))
 
         // Unified compact Mode / Case badge
         statusBadge = createTopChip("T9 ES", accent = true).apply {
@@ -191,7 +219,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
                 true
             }
         }
-        topBar.addView(statusBadge, marginEndParams(4))
+        utilityControlsLayout.addView(statusBadge, marginEndParams(4))
 
         // Switch to SwiftKey button
         val isSwiftKey = try {
@@ -214,7 +242,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
                 true
             }
         }
-        topBar.addView(switchImeButton, marginEndParams(4))
+        utilityControlsLayout.addView(switchImeButton, marginEndParams(4))
 
         // Resize overlay trigger
         resizeButton = createTopChip("⤢").apply {
@@ -224,9 +252,56 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
                 listener?.onResizeToggleRequested()
             }
         }
-        topBar.addView(resizeButton)
-
+        utilityControlsLayout.addView(resizeButton)
+        topBar.addView(utilityControlsLayout)
         mainLayout.addView(topBar)
+
+        // Candidate Grid Panel (expanded view of all alternative words)
+        candidateGridPanel = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
+
+        val gridHeader = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dpToPx(4f), 0, dpToPx(4f), dpToPx(6f))
+        }
+        val gridTitle = TextView(context).apply {
+            text = "Palabras coincidentes"
+            setTextColor(ContextCompat.getColor(context, R.color.kb_accent))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            typeface = Typeface.DEFAULT_BOLD
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val gridCloseBtn = createTopChip("▲ Cerrar").apply {
+            setOnClickListener {
+                performHaptic()
+                hideCandidateGrid()
+            }
+        }
+        gridHeader.addView(gridTitle)
+        gridHeader.addView(gridCloseBtn)
+        candidateGridPanel.addView(gridHeader)
+
+        candidateGridScroll = ScrollView(context).apply {
+            isVerticalScrollBarEnabled = true
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dpToPx((keyHeightDp * 4).toFloat())
+            )
+        }
+        candidateGridRowsContainer = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dpToPx(2f), 0, dpToPx(4f))
+        }
+        candidateGridScroll.addView(candidateGridRowsContainer)
+        candidateGridPanel.addView(candidateGridScroll)
+        mainLayout.addView(candidateGridPanel)
 
         // 2. Main Body: Left 3x4 numeric grid + Right action column
         body = LinearLayout(context).apply {
@@ -651,10 +726,17 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
         }
         val targetPanelScrollHeight = (heightPx * 4 - dpToPx(36f)).coerceAtLeast(dpToPx(160f))
         emojiMediaPanel.setPanelContentHeight(targetPanelScrollHeight)
+
+        val gridLp = candidateGridScroll.layoutParams
+        if (gridLp != null) {
+            gridLp.height = (heightPx * 4 - dpToPx(32f)).coerceAtLeast(dpToPx(160f))
+            candidateGridScroll.layoutParams = gridLp
+        }
         requestLayout()
     }
 
     fun showEmojiPanel() {
+        hideCandidateGrid()
         topBar.visibility = View.GONE
         body.visibility = View.GONE
         emojiMediaPanel.visibility = View.VISIBLE
@@ -667,6 +749,79 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
     }
 
     fun isEmojiPanelVisible(): Boolean = emojiMediaPanel.visibility == View.VISIBLE
+
+    fun showCandidateGrid() {
+        if (lastSuggestions.isEmpty()) return
+        candidateGridPanel.visibility = View.VISIBLE
+        body.visibility = View.GONE
+        expandButton.text = "▲"
+    }
+
+    fun hideCandidateGrid() {
+        candidateGridPanel.visibility = View.GONE
+        if (!isEmojiPanelVisible()) {
+            body.visibility = View.VISIBLE
+        }
+        expandButton.text = "▼"
+    }
+
+    fun isCandidateGridVisible(): Boolean = candidateGridPanel.visibility == View.VISIBLE
+
+    private fun updateCandidateGridContent(suggestions: List<String>) {
+        candidateGridRowsContainer.removeAllViews()
+        if (suggestions.isEmpty()) return
+
+        val columns = 3
+        val rows = (suggestions.size + columns - 1) / columns
+
+        for (r in 0 until rows) {
+            val row = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    dpToPx(44f)
+                ).apply {
+                    bottomMargin = dpToPx(6f)
+                }
+            }
+
+            for (c in 0 until columns) {
+                val index = r * columns + c
+                if (index < suggestions.size) {
+                    val word = suggestions[index]
+                    val isPrimary = (index == 0)
+                    val chip = TextView(context).apply {
+                        text = word
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+                        typeface = Typeface.DEFAULT_BOLD
+                        setTextColor(if (isPrimary) Color.WHITE else ContextCompat.getColor(context, R.color.kb_text_primary))
+                        gravity = Gravity.CENTER
+                        includeFontPadding = false
+                        background = GradientDrawable().apply {
+                            setColor(
+                                if (isPrimary) ContextCompat.getColor(context, R.color.kb_accent_soft)
+                                else ContextCompat.getColor(context, R.color.kb_key_bg)
+                            )
+                            cornerRadius = dpToPx(10f).toFloat()
+                            setStroke(dpToPx(1f), ContextCompat.getColor(context, R.color.kb_border))
+                        }
+                        setOnClickListener {
+                            performHaptic()
+                            hideCandidateGrid()
+                            listener?.onSuggestionSelected(word)
+                        }
+                    }
+                    row.addView(chip, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
+                        marginEnd = if (c < columns - 1) dpToPx(5f) else 0
+                    })
+                } else {
+                    val dummy = View(context)
+                    row.addView(dummy, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
+                }
+            }
+            candidateGridRowsContainer.addView(row)
+        }
+    }
 
     fun updateState(mode: InputMode, caseMode: CaseMode) {
         currentInputMode = mode
@@ -700,11 +855,31 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
         hasPendingDigits: Boolean,
         digits: String
     ) {
+        lastSuggestions = suggestions
         suggestionContainer.removeAllViews()
+
+        if (hasPendingDigits) {
+            // Typing mode: collapse utility buttons to give 100% of topBar to suggestions!
+            utilityControlsLayout.visibility = View.GONE
+            if (suggestions.size >= 3) {
+                expandButton.visibility = View.VISIBLE
+                expandButton.text = if (isCandidateGridVisible()) "▲" else "▼"
+            } else {
+                expandButton.visibility = View.GONE
+                hideCandidateGrid()
+            }
+        } else {
+            // Idle mode: show utility buttons, hide expand button & grid
+            utilityControlsLayout.visibility = View.VISIBLE
+            expandButton.visibility = View.GONE
+            hideCandidateGrid()
+        }
+
         if (suggestions.isNotEmpty()) {
             suggestions.forEachIndexed { index, word ->
                 val chip = createSuggestionChip(word, primary = index == 0) {
                     performHaptic()
+                    hideCandidateGrid()
                     listener?.onSuggestionSelected(word)
                 }
                 suggestionContainer.addView(chip, marginEndParams(6))
@@ -712,6 +887,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
             if (hasPendingDigits) {
                 val spellChip = createSuggestionChip("🔤 ABC", primary = false) {
                     performHaptic()
+                    hideCandidateGrid()
                     listener?.onFallbackMultiTapRequested()
                 }
                 suggestionContainer.addView(spellChip, marginEndParams(6))
@@ -719,6 +895,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
         } else if (hasPendingDigits) {
             val fallbackChip = createSuggestionChip("➕ Deletrear palabra (ABC)", primary = true) {
                 performHaptic()
+                hideCandidateGrid()
                 listener?.onFallbackMultiTapRequested()
             }
             suggestionContainer.addView(fallbackChip, marginEndParams(6))
@@ -726,7 +903,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
             val hintText = if (currentInputMode == InputMode.MULTI_TAP) {
                 "Modo ABC (multitap) · Toca T9 para volver"
             } else {
-                "T9 · Toca ABC para deletrear sin predicción"
+                "T9 · Mantén # para símbolos @"
             }
             val hint = TextView(context).apply {
                 text = hintText
@@ -740,10 +917,25 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
             suggestionContainer.addView(hint)
         }
         suggestionScroll.scrollTo(0, 0)
+        updateCandidateGridContent(suggestions)
+    }
+
+    private fun prepareStripWithCloseChip(): TextView {
+        utilityControlsLayout.visibility = View.GONE
+        expandButton.visibility = View.GONE
+        hideCandidateGrid()
+        suggestionContainer.removeAllViews()
+        val closeChip = createSuggestionChip("✕", primary = false) {
+            performHaptic()
+            utilityControlsLayout.visibility = View.VISIBLE
+            showSuggestions(emptyList(), false, "")
+        }
+        suggestionContainer.addView(closeChip, marginEndParams(6))
+        return closeChip
     }
 
     fun showModePickerStrip() {
-        suggestionContainer.removeAllViews()
+        prepareStripWithCloseChip()
         val modes = listOf(
             InputMode.T9_ES to "T9 Español",
             InputMode.T9_EN to "T9 English",
@@ -754,6 +946,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
             val isCurrent = (mode == currentInputMode)
             val chip = createSuggestionChip(label, primary = isCurrent) {
                 performHaptic()
+                utilityControlsLayout.visibility = View.VISIBLE
                 listener?.onModeSelected(mode)
             }
             suggestionContainer.addView(chip, marginEndParams(6))
@@ -762,10 +955,11 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
     }
 
     fun showEmailDomainStrip() {
-        suggestionContainer.removeAllViews()
+        prepareStripWithCloseChip()
         T9KeyMap.EMAIL_DOMAINS.forEach { domain ->
             val chip = createSuggestionChip(domain, primary = true) {
                 performHaptic()
+                utilityControlsLayout.visibility = View.VISIBLE
                 listener?.onSymbolSelected(domain)
             }
             suggestionContainer.addView(chip, marginEndParams(6))
@@ -774,9 +968,10 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
     }
 
     fun showPasswordHelpStrip() {
-        suggestionContainer.removeAllViews()
+        prepareStripWithCloseChip()
         val chip = createSuggestionChip("🔑 Generar contraseña segura", primary = true) {
             performStrongHaptic()
+            utilityControlsLayout.visibility = View.VISIBLE
             listener?.onGeneratePasswordRequested()
         }
         suggestionContainer.addView(chip, marginEndParams(6))
@@ -784,10 +979,11 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
     }
 
     fun showUrlShortcutsStrip() {
-        suggestionContainer.removeAllViews()
+        prepareStripWithCloseChip()
         T9KeyMap.URL_SHORTCUTS.forEach { shortcut ->
             val chip = createSuggestionChip(shortcut, primary = false) {
                 performHaptic()
+                utilityControlsLayout.visibility = View.VISIBLE
                 listener?.onSymbolSelected(shortcut)
             }
             suggestionContainer.addView(chip, marginEndParams(5))
@@ -796,20 +992,22 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
     }
 
     fun showClipboardStrip(items: List<String>) {
-        suggestionContainer.removeAllViews()
+        prepareStripWithCloseChip()
         if (items.isEmpty()) {
             val emptyTv = TextView(context).apply {
                 text = "Portapapeles vacío"
                 setTextColor(ContextCompat.getColor(context, R.color.kb_text_secondary))
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
                 setPadding(dpToPx(8f), 0, dpToPx(8f), 0)
+                gravity = Gravity.CENTER_VERTICAL
             }
             suggestionContainer.addView(emptyTv)
         } else {
             items.forEach { item ->
-                val preview = if (item.length > 18) item.take(16) + "…" else item
+                val preview = if (item.length > 22) item.take(20) + "…" else item
                 val chip = createSuggestionChip(preview, primary = false) {
                     performHaptic()
+                    utilityControlsLayout.visibility = View.VISIBLE
                     listener?.onSymbolSelected(item)
                 }
                 suggestionContainer.addView(chip, marginEndParams(6))
@@ -819,10 +1017,11 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
     }
 
     fun showSymbolStrip() {
-        suggestionContainer.removeAllViews()
+        prepareStripWithCloseChip()
         T9KeyMap.FREQUENT_SYMBOLS.forEach { sym ->
             val chip = createSuggestionChip(sym, primary = false) {
                 performHaptic()
+                utilityControlsLayout.visibility = View.VISIBLE
                 listener?.onSymbolSelected(sym)
             }
             suggestionContainer.addView(chip, marginEndParams(5))
@@ -832,7 +1031,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
 
     // Emojis grandes (24sp) y cómodos de pulsar
     fun showEmojiStrip() {
-        suggestionContainer.removeAllViews()
+        prepareStripWithCloseChip()
         T9KeyMap.POPULAR_EMOJIS.forEach { emo ->
             val chip = TextView(context).apply {
                 text = emo
@@ -848,6 +1047,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
                 isFocusable = true
                 setOnClickListener {
                     performHaptic()
+                    utilityControlsLayout.visibility = View.VISIBLE
                     listener?.onSymbolSelected(emo)
                 }
             }
