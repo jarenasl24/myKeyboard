@@ -41,6 +41,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
         fun onZeroLongPress()
         fun onHashKey()
         fun onBackspace()
+        fun onDeleteWord()
         fun onEnterKey()
         fun onQuickLanguageToggle()
         fun onSuggestionSelected(word: String)
@@ -48,9 +49,12 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
         fun onSymbolSelected(symbol: String)
         fun onSwipeDeleteWord()
         fun onSwipeSpace()
+        fun onMoveCursor(delta: Int)
         fun onResizeToggleRequested()
         fun onSwitchImeRequested()
         fun onShowImePickerRequested()
+        fun onClipboardRequested()
+        fun onGeneratePasswordRequested()
     }
 
     var listener: Listener? = null
@@ -62,6 +66,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
     private val suggestionContainer: LinearLayout
     private val suggestionScroll: HorizontalScrollView
     private val statusBadge: TextView
+    private val clipboardButton: TextView
     private val emojiButton: TextView
     private val switchImeButton: TextView
     private val resizeButton: TextView
@@ -69,7 +74,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
     private val langButton: TextView
     private val backspaceButton: TextView
 
-    // Hold & Slide popup for *
+    // Hold & Slide popup for # (Symbols)
     private val symbolPopupOverlay: LinearLayout
     private val symbolPopupChips = mutableListOf<TextView>()
     private var popupSelectedIndex = 0
@@ -79,17 +84,15 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
     private val keypadRows = mutableListOf<LinearLayout>()
 
     private val repeatHandler = Handler(Looper.getMainLooper())
-    private var repeatCount = 0
     private var isBackspacePressed = false
 
-    private val backspaceRepeater = object : Runnable {
+    // Backspace: tap = 1 char, hold > 280ms = delete whole word, then repeat whole words with strong haptics
+    private val wordDeleteRepeater = object : Runnable {
         override fun run() {
             if (!isBackspacePressed) return
-            performHaptic()
-            listener?.onBackspace()
-            repeatCount++
-            val nextDelay = if (repeatCount > 8) 40L else 90L
-            repeatHandler.postDelayed(this, nextDelay)
+            performStrongHaptic()
+            listener?.onDeleteWord()
+            repeatHandler.postDelayed(this, 230L)
         }
     }
 
@@ -140,7 +143,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
 
         suggestionScroll = HorizontalScrollView(context).apply {
             isHorizontalScrollBarEnabled = false
-            layoutParams = LinearLayout.LayoutParams(0, dpToPx(34f), 1f)
+            layoutParams = LinearLayout.LayoutParams(0, dpToPx(38f), 1f)
         }
         suggestionContainer = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -149,14 +152,15 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
         suggestionScroll.addView(suggestionContainer)
         topBar.addView(suggestionScroll)
 
-        // Unified compact Mode / Case badge
-        statusBadge = createTopChip("T9 ES", accent = true).apply {
+        // Clipboard history button
+        clipboardButton = createTopChip("📋").apply {
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
             setOnClickListener {
                 performHaptic()
-                listener?.onHashKey()
+                listener?.onClipboardRequested()
             }
         }
-        topBar.addView(statusBadge, marginEndParams(4))
+        topBar.addView(clipboardButton, marginEndParams(4))
 
         // Direct Emoji button
         emojiButton = createTopChip("😊").apply {
@@ -168,7 +172,16 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
         }
         topBar.addView(emojiButton, marginEndParams(4))
 
-        // Switch to SwiftKey / other installed IME button
+        // Unified compact Mode / Case badge
+        statusBadge = createTopChip("T9 ES", accent = true).apply {
+            setOnClickListener {
+                performHaptic()
+                listener?.onStarLongPress()
+            }
+        }
+        topBar.addView(statusBadge, marginEndParams(4))
+
+        // Switch to SwiftKey button
         val isSwiftKey = try {
             val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
             imm?.enabledInputMethodList?.any { it.packageName.contains("swiftkey", ignoreCase = true) } == true
@@ -256,31 +269,31 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
             )
         }
 
-        // Key * with Hold & Slide Symbol Selection!
-        val starKey = createNumericKey("*", "Aa · @?!")
-        setupStarSlideToSelect(starKey)
+        // Key *: Dedicated to Case & Mode toggle
+        val starKey = createNumericKey("*", "Aa / Modo", onClick = {
+            performHaptic()
+            listener?.onStarKey()
+        }, onLongClick = {
+            performHaptic()
+            listener?.onStarLongPress()
+            true
+        })
         keyViews.add(starKey)
         bottomRow.addView(starKey, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
             marginEnd = dpToPx(5f)
         })
 
-        val zeroKey = createNumericKey("0", "ESPACIO", onClick = {
-            performHaptic()
-            listener?.onZeroKey()
-        }, onLongClick = {
-            performHaptic()
-            listener?.onZeroLongPress()
-            true
-        })
+        // Key 0: Space + Cursor trackpad slider
+        val zeroKey = createNumericKey("0", "ESPACIO")
+        setupZeroCursorTrackpad(zeroKey)
         keyViews.add(zeroKey)
         bottomRow.addView(zeroKey, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
             marginEnd = dpToPx(5f)
         })
 
-        val hashKey = createNumericKey("#", "MODO", onClick = {
-            performHaptic()
-            listener?.onHashKey()
-        })
+        // Key #: Dedicated to Symbols with Hold & Slide Selector!
+        val hashKey = createNumericKey("#", "SÍM / @")
+        setupHashSlideToSelect(hashKey)
         keyViews.add(hashKey)
         bottomRow.addView(hashKey, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
             marginEnd = dpToPx(5f)
@@ -296,23 +309,23 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
         }
 
+        // Backspace: Tap deletes char; Hold > 280ms deletes whole word and repeats word by word with strong haptic pulse!
         backspaceButton = createActionKey("⌫").apply {
             setOnTouchListener { v, event ->
                 when (event.actionMasked) {
                     MotionEvent.ACTION_DOWN -> {
                         v.isPressed = true
                         isBackspacePressed = true
-                        repeatCount = 0
                         performHaptic()
                         listener?.onBackspace()
-                        repeatHandler.removeCallbacks(backspaceRepeater)
-                        repeatHandler.postDelayed(backspaceRepeater, 350L)
+                        repeatHandler.removeCallbacks(wordDeleteRepeater)
+                        repeatHandler.postDelayed(wordDeleteRepeater, 280L)
                         true
                     }
                     MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                         v.isPressed = false
                         isBackspacePressed = false
-                        repeatHandler.removeCallbacks(backspaceRepeater)
+                        repeatHandler.removeCallbacks(wordDeleteRepeater)
                         true
                     }
                     else -> false
@@ -355,7 +368,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
         mainLayout.addView(body)
         addView(mainLayout)
 
-        // 3. Hold & Slide Symbol Popup Overlay (Horizontal Floating Bar)
+        // 3. Hold & Slide Symbol Popup Overlay for # (Floating Bar)
         symbolPopupOverlay = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
@@ -380,7 +393,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
             val tv = TextView(context).apply {
                 text = sym
                 setTextColor(Color.WHITE)
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, if (sym == "😊") 16f else 15f)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, if (sym == "😊") 18f else 15f)
                 typeface = Typeface.DEFAULT_BOLD
                 gravity = Gravity.CENTER
                 includeFontPadding = false
@@ -396,7 +409,8 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
         addView(symbolPopupOverlay)
     }
 
-    private fun setupStarSlideToSelect(starKey: View) {
+    // --- Key # (Symbols): Tap = symbols strip, Hold & Slide = symbol popup ---
+    private fun setupHashSlideToSelect(hashKey: View) {
         var isLongPressActive = false
         val longPressRunnable = Runnable {
             isLongPressActive = true
@@ -404,11 +418,11 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
             showSymbolPopupOverlay()
         }
 
-        starKey.setOnTouchListener { _, event ->
+        hashKey.setOnTouchListener { _, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     isLongPressActive = false
-                    starKey.isPressed = true
+                    hashKey.isPressed = true
                     repeatHandler.postDelayed(longPressRunnable, 220L)
                     true
                 }
@@ -419,7 +433,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    starKey.isPressed = false
+                    hashKey.isPressed = false
                     repeatHandler.removeCallbacks(longPressRunnable)
                     if (isLongPressActive) {
                         val selected = commitSymbolPopupSelection()
@@ -432,14 +446,73 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
                         }
                     } else {
                         performHaptic()
-                        listener?.onStarKey()
+                        showSymbolStrip()
                     }
                     true
                 }
                 MotionEvent.ACTION_CANCEL -> {
-                    starKey.isPressed = false
+                    hashKey.isPressed = false
                     repeatHandler.removeCallbacks(longPressRunnable)
                     hideSymbolPopupOverlay()
+                    true
+                }
+                else -> false
+            }
+        }
+    }
+
+    // --- Key 0 (Space + Cursor Trackpad Slider) ---
+    private fun setupZeroCursorTrackpad(zeroKey: View) {
+        var downX = 0f
+        var lastX = 0f
+        var isDraggingCursor = false
+        var isLongPress = false
+
+        val longPressRunnable = Runnable {
+            isLongPress = true
+            performHaptic()
+            listener?.onZeroLongPress()
+        }
+
+        zeroKey.setOnTouchListener { _, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    downX = event.x
+                    lastX = event.x
+                    isDraggingCursor = false
+                    isLongPress = false
+                    zeroKey.isPressed = true
+                    repeatHandler.postDelayed(longPressRunnable, 400L)
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val totalDx = event.x - downX
+                    if (abs(totalDx) > dpToPx(16f)) {
+                        repeatHandler.removeCallbacks(longPressRunnable)
+                        isDraggingCursor = true
+                        val stepDx = event.x - lastX
+                        val stepThreshold = dpToPx(14f)
+                        if (abs(stepDx) >= stepThreshold) {
+                            val delta = if (stepDx > 0) 1 else -1
+                            listener?.onMoveCursor(delta)
+                            performHaptic()
+                            lastX = event.x
+                        }
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    zeroKey.isPressed = false
+                    repeatHandler.removeCallbacks(longPressRunnable)
+                    if (!isDraggingCursor && !isLongPress) {
+                        performHaptic()
+                        listener?.onZeroKey()
+                    }
+                    true
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    zeroKey.isPressed = false
+                    repeatHandler.removeCallbacks(longPressRunnable)
                     true
                 }
                 else -> false
@@ -576,7 +649,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
             suggestionContainer.addView(fallbackChip, marginEndParams(6))
         } else {
             val hint = TextView(context).apply {
-                text = "T9 · Mantén * para símbolos @"
+                text = "T9 · Mantén # para símbolos @"
                 setTextColor(ContextCompat.getColor(context, R.color.kb_text_secondary))
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f)
                 setPadding(dpToPx(6f), 0, dpToPx(6f), 0)
@@ -585,6 +658,63 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
                 isSingleLine = true
             }
             suggestionContainer.addView(hint)
+        }
+        suggestionScroll.scrollTo(0, 0)
+    }
+
+    fun showEmailDomainStrip() {
+        suggestionContainer.removeAllViews()
+        T9KeyMap.EMAIL_DOMAINS.forEach { domain ->
+            val chip = createSuggestionChip(domain, primary = true) {
+                performHaptic()
+                listener?.onSymbolSelected(domain)
+            }
+            suggestionContainer.addView(chip, marginEndParams(6))
+        }
+        suggestionScroll.scrollTo(0, 0)
+    }
+
+    fun showPasswordHelpStrip() {
+        suggestionContainer.removeAllViews()
+        val chip = createSuggestionChip("🔑 Generar contraseña segura", primary = true) {
+            performStrongHaptic()
+            listener?.onGeneratePasswordRequested()
+        }
+        suggestionContainer.addView(chip, marginEndParams(6))
+        suggestionScroll.scrollTo(0, 0)
+    }
+
+    fun showUrlShortcutsStrip() {
+        suggestionContainer.removeAllViews()
+        T9KeyMap.URL_SHORTCUTS.forEach { shortcut ->
+            val chip = createSuggestionChip(shortcut, primary = false) {
+                performHaptic()
+                listener?.onSymbolSelected(shortcut)
+            }
+            suggestionContainer.addView(chip, marginEndParams(5))
+        }
+        suggestionScroll.scrollTo(0, 0)
+    }
+
+    fun showClipboardStrip(items: List<String>) {
+        suggestionContainer.removeAllViews()
+        if (items.isEmpty()) {
+            val emptyTv = TextView(context).apply {
+                text = "Portapapeles vacío"
+                setTextColor(ContextCompat.getColor(context, R.color.kb_text_secondary))
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+                setPadding(dpToPx(8f), 0, dpToPx(8f), 0)
+            }
+            suggestionContainer.addView(emptyTv)
+        } else {
+            items.forEach { item ->
+                val preview = if (item.length > 18) item.take(16) + "…" else item
+                val chip = createSuggestionChip(preview, primary = false) {
+                    performHaptic()
+                    listener?.onSymbolSelected(item)
+                }
+                suggestionContainer.addView(chip, marginEndParams(6))
+            }
         }
         suggestionScroll.scrollTo(0, 0)
     }
@@ -601,14 +731,28 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
         suggestionScroll.scrollTo(0, 0)
     }
 
+    // Emojis grandes (24sp) y cómodos de pulsar
     fun showEmojiStrip() {
         suggestionContainer.removeAllViews()
         T9KeyMap.POPULAR_EMOJIS.forEach { emo ->
-            val chip = createSuggestionChip(emo, primary = false) {
-                performHaptic()
-                listener?.onSymbolSelected(emo)
+            val chip = TextView(context).apply {
+                text = emo
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 24f)
+                gravity = Gravity.CENTER
+                includeFontPadding = false
+                setPadding(dpToPx(10f), dpToPx(4f), dpToPx(10f), dpToPx(4f))
+                background = GradientDrawable().apply {
+                    setColor(ContextCompat.getColor(context, R.color.kb_key_bg))
+                    cornerRadius = dpToPx(12f).toFloat()
+                }
+                isClickable = true
+                isFocusable = true
+                setOnClickListener {
+                    performHaptic()
+                    listener?.onSymbolSelected(emo)
+                }
             }
-            suggestionContainer.addView(chip, marginEndParams(5))
+            suggestionContainer.addView(chip, marginEndParams(6))
         }
         suggestionScroll.scrollTo(0, 0)
     }
@@ -622,6 +766,12 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
         }
         @Suppress("DEPRECATION")
         performHapticFeedback(constant, HapticFeedbackConstants.FLAG_IGNORE_VIEW_SETTING)
+    }
+
+    private fun performStrongHaptic() {
+        if (hapticStrength <= 0) return
+        @Suppress("DEPRECATION")
+        performHapticFeedback(HapticFeedbackConstants.LONG_PRESS, HapticFeedbackConstants.FLAG_IGNORE_VIEW_SETTING)
     }
 
     private fun createNumericKey(

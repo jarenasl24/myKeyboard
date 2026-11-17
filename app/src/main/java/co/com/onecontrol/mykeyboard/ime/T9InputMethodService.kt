@@ -1,5 +1,6 @@
 package co.com.onecontrol.mykeyboard.ime
 
+import android.content.Context
 import android.inputmethodservice.InputMethodService
 import android.text.InputType
 import android.view.KeyEvent
@@ -112,8 +113,20 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
         returnToT9AfterWord = null
 
         val inputType = info?.inputType ?: 0
-        val variation = inputType and InputType.TYPE_MASK_CLASS
-        if (variation == InputType.TYPE_CLASS_NUMBER || variation == InputType.TYPE_CLASS_PHONE) {
+        val inputClass = inputType and InputType.TYPE_MASK_CLASS
+        val variation = inputType and InputType.TYPE_MASK_VARIATION
+
+        val isPasswordField = (variation == InputType.TYPE_TEXT_VARIATION_PASSWORD ||
+            variation == InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD ||
+            variation == InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD ||
+            (inputClass == InputType.TYPE_CLASS_NUMBER && variation == 16))
+
+        val isEmailField = (variation == InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS ||
+            variation == InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS)
+
+        val isUrlField = (variation == InputType.TYPE_TEXT_VARIATION_URI)
+
+        if (inputClass == InputType.TYPE_CLASS_NUMBER || inputClass == InputType.TYPE_CLASS_PHONE) {
             inputMode = InputMode.NUMERIC
         } else {
             inputMode = currentConfig.inputMode
@@ -123,6 +136,7 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
             InputType.TYPE_TEXT_FLAG_CAP_WORDS or
             InputType.TYPE_TEXT_FLAG_CAP_SENTENCES)
         caseMode = when {
+            isEmailField || isPasswordField -> CaseMode.LOWER
             (capsFlags and InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS) != 0 -> CaseMode.UPPER
             (capsFlags and (InputType.TYPE_TEXT_FLAG_CAP_SENTENCES or InputType.TYPE_TEXT_FLAG_CAP_WORDS)) != 0 -> CaseMode.CAPITALIZE
             else -> CaseMode.LOWER
@@ -130,7 +144,13 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
 
         keyboardView?.updateImeAction(info?.imeOptions ?: EditorInfo.IME_ACTION_NONE)
         keyboardView?.updateState(inputMode, caseMode)
-        keyboardView?.showSuggestions(emptyList(), false, "")
+
+        when {
+            isEmailField -> keyboardView?.showEmailDomainStrip()
+            isPasswordField -> keyboardView?.showPasswordHelpStrip()
+            isUrlField -> keyboardView?.showUrlShortcutsStrip()
+            else -> keyboardView?.showSuggestions(emptyList(), false, "")
+        }
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
@@ -338,6 +358,59 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
         if (deleteCount > 0) {
             ic.deleteSurroundingText(deleteCount, 0)
         }
+    }
+
+    override fun onDeleteWord() {
+        onSwipeDeleteWord()
+    }
+
+    override fun onMoveCursor(delta: Int) {
+        val ic = currentInputConnection ?: return
+        val keycode = if (delta > 0) KeyEvent.KEYCODE_DPAD_RIGHT else KeyEvent.KEYCODE_DPAD_LEFT
+        ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keycode))
+        ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keycode))
+    }
+
+    override fun onClipboardRequested() {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+        val clip = clipboard?.primaryClip
+        val items = mutableListOf<String>()
+        if (clip != null) {
+            for (i in 0 until clip.itemCount) {
+                val text = clip.getItemAt(i).text?.toString()?.trim()
+                if (!text.isNullOrEmpty()) {
+                    items.add(text)
+                }
+            }
+        }
+        keyboardView?.showClipboardStrip(items.distinct().take(6))
+    }
+
+    override fun onGeneratePasswordRequested() {
+        val ic = currentInputConnection ?: return
+        val upper = "ABCDEFGHJKLMNPQRSTUVWXYZ"
+        val lower = "abcdefghijkmnopqrstuvwxyz"
+        val digits = "23456789"
+        val special = "!@#$%&*?"
+        val all = upper + lower + digits + special
+        val sr = java.security.SecureRandom()
+        val pwdChars = mutableListOf(
+            upper[sr.nextInt(upper.length)],
+            lower[sr.nextInt(lower.length)],
+            digits[sr.nextInt(digits.length)],
+            special[sr.nextInt(special.length)]
+        )
+        for (i in 4 until 16) {
+            pwdChars.add(all[sr.nextInt(all.length)])
+        }
+        pwdChars.shuffle(sr)
+        val password = pwdChars.joinToString("")
+        ic.commitText(password, 1)
+
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+        val clipData = android.content.ClipData.newPlainText("Generated Password", password)
+        clipboard?.setPrimaryClip(clipData)
+        android.widget.Toast.makeText(this, "Contraseña generada y copiada al portapapeles", android.widget.Toast.LENGTH_SHORT).show()
     }
 
     override fun onSwipeSpace() {

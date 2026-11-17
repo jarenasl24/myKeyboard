@@ -40,6 +40,14 @@ object T9KeyMap {
         "😬", "🤷", "🤦", "🚀", "✨", "💯", "😴", "👀", "🙌", "💔"
     )
 
+    val EMAIL_DOMAINS: List<String> = listOf(
+        "@gmail.com", "@hotmail.com", "@outlook.com", "@yahoo.com", "@icloud.com"
+    )
+
+    val URL_SHORTCUTS: List<String> = listOf(
+        ".com", ".co", ".org", ".net", "https://", "www."
+    )
+
     val KEY_SUB_LABELS: Map<Char, String> = mapOf(
         '1' to ".,?!@",
         '2' to "ABC",
