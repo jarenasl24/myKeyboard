@@ -8,6 +8,7 @@ import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
 import co.com.onecontrol.mykeyboard.dictionary.T9DictionaryTrie
+import co.com.onecontrol.mykeyboard.dictionary.T9KeyMap
 import co.com.onecontrol.mykeyboard.engine.CaseMode
 import co.com.onecontrol.mykeyboard.engine.InputMode
 import co.com.onecontrol.mykeyboard.engine.MultiTapEngine
@@ -388,7 +389,8 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
             return
         }
         val suggestions = t9Engine.getSuggestions(inputMode.toLanguage(), caseMode)
-        val preview = suggestions.firstOrNull() ?: t9Engine.currentDigits
+        val fallbackText = caseMode.applyToWord(T9KeyMap.digitsToDefaultLetters(t9Engine.currentDigits))
+        val preview = suggestions.firstOrNull() ?: fallbackText
         ic?.setComposingText(preview, 1)
         keyboardView?.showSuggestions(
             suggestions = suggestions,
@@ -400,7 +402,8 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
     private fun commitT9Composing(ic: InputConnection, learn: Boolean) {
         if (t9Engine.isEmpty()) return
         val primary = t9Engine.getPrimarySuggestion(inputMode.toLanguage(), caseMode)
-        val toCommit = primary ?: t9Engine.currentDigits
+        val fallbackText = caseMode.applyToWord(T9KeyMap.digitsToDefaultLetters(t9Engine.currentDigits))
+        val toCommit = primary ?: fallbackText
         ic.commitText(toCommit, 1)
         if (learn && primary != null) {
             t9Engine.learnWord(inputMode.toLanguage(), primary)

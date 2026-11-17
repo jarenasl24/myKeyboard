@@ -397,7 +397,7 @@ class T9KeyboardView(context: Context) : LinearLayout(context) {
                 suggestionContainer.addView(chip, marginEndParams(6))
             }
         } else if (hasPendingDigits) {
-            val fallbackChip = createSuggestionChip("Escribir \"$digits\" (ABC)", primary = true) {
+            val fallbackChip = createSuggestionChip("➕ Deletrear palabra (ABC)", primary = true) {
                 performHaptic()
                 listener?.onFallbackMultiTapRequested()
             }

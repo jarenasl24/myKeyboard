@@ -64,4 +64,13 @@ object T9KeyMap {
         }
         return sb.toString()
     }
+
+    fun digitsToDefaultLetters(digits: String): String {
+        val sb = StringBuilder(digits.length)
+        for (d in digits) {
+            val chars = MULTI_TAP_CHARS[d]
+            sb.append(chars?.firstOrNull() ?: d)
+        }
+        return sb.toString()
+    }
 }
