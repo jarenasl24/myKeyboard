@@ -154,6 +154,44 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
         }
     }
 
+    override fun onUpdateSelection(
+        oldSelStart: Int,
+        oldSelEnd: Int,
+        newSelStart: Int,
+        newSelEnd: Int,
+        candidatesStart: Int,
+        candidatesEnd: Int
+    ) {
+        super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd)
+
+        val hasComposing = !t9Engine.isEmpty() || multiTapEngine.hasPending()
+        if (hasComposing) {
+            val isAtComposingEnd = (candidatesStart in 0..candidatesEnd &&
+                newSelStart == candidatesEnd &&
+                newSelEnd == candidatesEnd)
+
+            if (!isAtComposingEnd) {
+                currentInputConnection?.finishComposingText()
+                if (!t9Engine.isEmpty()) {
+                    val primary = t9Engine.getPrimarySuggestion(inputMode.toLanguage(), caseMode)
+                    if (primary != null) {
+                        t9Engine.learnWord(inputMode.toLanguage(), primary)
+                    }
+                    t9Engine.clear()
+                }
+                if (multiTapEngine.hasPending()) {
+                    multiTapEngine.reset()
+                }
+                multiTapWordBuffer.clear()
+                keyboardView?.showSuggestions(emptyList(), false, "")
+            }
+        }
+
+        currentInputConnection?.let { ic ->
+            applyAutoCapIfSentenceEnd(ic)
+        }
+    }
+
     override fun onFinishInputView(finishingInput: Boolean) {
         super.onFinishInputView(finishingInput)
         commitAllComposing()
@@ -367,6 +405,21 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
 
     override fun onMoveCursor(delta: Int) {
         val ic = currentInputConnection ?: return
+        if (!t9Engine.isEmpty() || multiTapEngine.hasPending()) {
+            ic.finishComposingText()
+            if (!t9Engine.isEmpty()) {
+                val primary = t9Engine.getPrimarySuggestion(inputMode.toLanguage(), caseMode)
+                if (primary != null) {
+                    t9Engine.learnWord(inputMode.toLanguage(), primary)
+                }
+                t9Engine.clear()
+            }
+            if (multiTapEngine.hasPending()) {
+                multiTapEngine.reset()
+            }
+            multiTapWordBuffer.clear()
+            keyboardView?.showSuggestions(emptyList(), false, "")
+        }
         val keycode = if (delta > 0) KeyEvent.KEYCODE_DPAD_RIGHT else KeyEvent.KEYCODE_DPAD_LEFT
         ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keycode))
         ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keycode))
