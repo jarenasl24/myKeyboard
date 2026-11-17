@@ -84,18 +84,26 @@ class MainActivity : AppCompatActivity() {
         updateImeStatus()
     }
 
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) {
+            updateImeStatus()
+        }
+    }
+
     private fun updateImeStatus() {
         val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
-        val ourComponent = ComponentName(this, T9InputMethodService::class.java).flattenToShortString()
+        val ourComponentShort = ComponentName(this, T9InputMethodService::class.java).flattenToShortString()
+        val ourComponentFull = ComponentName(this, T9InputMethodService::class.java).flattenToString()
         val isEnabled = imm.enabledInputMethodList.any {
-            it.packageName == packageName || it.id == ourComponent
+            it.packageName == packageName || it.id == ourComponentShort || it.id == ourComponentFull || it.serviceInfo.packageName == packageName
         }
-        val defaultIme = Settings.Secure.getString(contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)
-        val isSelected = defaultIme != null && (defaultIme.contains(packageName) || defaultIme == ourComponent)
+        val defaultIme = Settings.Secure.getString(contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD) ?: ""
+        val isSelected = defaultIme.contains(packageName) || defaultIme == ourComponentShort || defaultIme == ourComponentFull
 
         binding.tvStatusBadge.text = when {
             isEnabled && isSelected -> "Estado: ✓ Habilitado y seleccionado como teclado activo"
-            isEnabled -> "Estado: ✓ Habilitado (falta seleccionarlo en el paso 2)"
+            isEnabled -> "Estado: ✓ Habilitado (toca el paso 2 para seleccionarlo)"
             else -> "Estado: Pendiente de habilitar en Ajustes (paso 1)"
         }
     }

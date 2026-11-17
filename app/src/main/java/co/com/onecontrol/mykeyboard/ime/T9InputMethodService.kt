@@ -6,6 +6,7 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
+import android.view.inputmethod.InputMethodManager
 import co.com.onecontrol.mykeyboard.dictionary.T9DictionaryTrie
 import co.com.onecontrol.mykeyboard.engine.CaseMode
 import co.com.onecontrol.mykeyboard.engine.InputMode
@@ -345,6 +346,19 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
     override fun onResizeToggleRequested() {
         val c = container ?: return
         c.setResizeMode(!c.isInResizeMode())
+    }
+
+    override fun onSwitchImeRequested() {
+        val switched = switchToPreviousInputMethod()
+        if (!switched) {
+            val imm = getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager
+            imm?.showInputMethodPicker()
+        }
+    }
+
+    override fun onShowImePickerRequested() {
+        val imm = getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager
+        imm?.showInputMethodPicker()
     }
 
     // --- Helpers ---

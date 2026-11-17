@@ -36,13 +36,13 @@ data class KeyboardConfig(
         const val MAX_WIDTH_PERCENT = 100
         const val DEFAULT_WIDTH_PERCENT = 72
 
-        const val MIN_KEY_HEIGHT_DP = 38
-        const val MAX_KEY_HEIGHT_DP = 76
-        const val DEFAULT_KEY_HEIGHT_DP = 52
+        const val MIN_KEY_HEIGHT_DP = 36
+        const val MAX_KEY_HEIGHT_DP = 64
+        const val DEFAULT_KEY_HEIGHT_DP = 48
 
-        const val MIN_BOTTOM_MARGIN_DP = 0
+        const val MIN_BOTTOM_MARGIN_DP = 6
         const val MAX_BOTTOM_MARGIN_DP = 64
-        const val DEFAULT_BOTTOM_MARGIN_DP = 14
+        const val DEFAULT_BOTTOM_MARGIN_DP = 16
 
         const val DEFAULT_HAPTIC_STRENGTH = 60
         const val DEFAULT_MULTITAP_TIMEOUT_MS = 650L

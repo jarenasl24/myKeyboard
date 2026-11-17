@@ -118,45 +118,8 @@ class T9DictionaryTrie(private val context: Context) {
             node = node.children[idx] ?: return emptyList()
         }
 
-        val exactMatches = synchronized(node.words) {
-            node.words.map { it.word }
-        }
-
-        if (exactMatches.size >= limit) {
-            return exactMatches.take(limit)
-        }
-
-        // Fill remaining slots with prefix-completion candidates
-        val prefixMatches = mutableListOf<WordEntry>()
-        collectPrefixWords(node, prefixMatches, maxCollect = 30)
-        val exactSet = exactMatches.toHashSet()
-        val extra = prefixMatches
-            .asSequence()
-            .filter { it.word !in exactSet }
-            .sortedByDescending { it.frequency }
-            .map { it.word }
-            .distinct()
-            .take(limit - exactMatches.size)
-            .toList()
-
-        return exactMatches + extra
-    }
-
-    private fun collectPrefixWords(
-        node: TrieNode,
-        out: MutableList<WordEntry>,
-        maxCollect: Int
-    ) {
-        if (out.size >= maxCollect) return
-        for (child in node.children) {
-            if (child != null) {
-                synchronized(child.words) {
-                    out.addAll(child.words.take(4))
-                }
-                if (out.size < maxCollect) {
-                    collectPrefixWords(child, out, maxCollect)
-                }
-            }
+        return synchronized(node.words) {
+            node.words.map { it.word }.take(limit)
         }
     }
 

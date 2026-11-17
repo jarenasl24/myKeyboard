@@ -47,6 +47,8 @@ class T9KeyboardView(context: Context) : LinearLayout(context) {
         fun onSwipeDeleteWord()
         fun onSwipeSpace()
         fun onResizeToggleRequested()
+        fun onSwitchImeRequested()
+        fun onShowImePickerRequested()
     }
 
     var listener: Listener? = null
@@ -56,8 +58,8 @@ class T9KeyboardView(context: Context) : LinearLayout(context) {
 
     private val suggestionContainer: LinearLayout
     private val suggestionScroll: HorizontalScrollView
-    private val modeBadge: TextView
-    private val caseBadge: TextView
+    private val statusBadge: TextView
+    private val switchImeButton: TextView
     private val resizeButton: TextView
     private val enterButton: TextView
     private val langButton: TextView
@@ -107,7 +109,7 @@ class T9KeyboardView(context: Context) : LinearLayout(context) {
 
     init {
         orientation = VERTICAL
-        setPadding(dpToPx(6f), dpToPx(6f), dpToPx(6f), dpToPx(8f))
+        setPadding(dpToPx(6f), dpToPx(6f), dpToPx(6f), dpToPx(12f))
         layoutParams = LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
@@ -117,7 +119,7 @@ class T9KeyboardView(context: Context) : LinearLayout(context) {
         val topBar = LinearLayout(context).apply {
             orientation = HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dpToPx(2f), 0, dpToPx(2f), dpToPx(6f))
+            setPadding(dpToPx(2f), 0, dpToPx(2f), dpToPx(5f))
         }
 
         suggestionScroll = HorizontalScrollView(context).apply {
@@ -131,24 +133,33 @@ class T9KeyboardView(context: Context) : LinearLayout(context) {
         suggestionScroll.addView(suggestionContainer)
         topBar.addView(suggestionScroll)
 
-        caseBadge = createTopChip("abc").apply {
-            setOnClickListener {
-                performHaptic()
-                listener?.onStarKey()
-            }
-        }
-        topBar.addView(caseBadge, marginEndParams(4))
-
-        modeBadge = createTopChip("T9 ES", accent = true).apply {
+        // Unified compact Mode / Case badge
+        statusBadge = createTopChip("T9 ES", accent = true).apply {
             setOnClickListener {
                 performHaptic()
                 listener?.onHashKey()
             }
         }
-        topBar.addView(modeBadge, marginEndParams(4))
+        topBar.addView(statusBadge, marginEndParams(4))
 
+        // Switch to SwiftKey / other installed IME button
+        switchImeButton = createTopChip("⌨").apply {
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            setOnClickListener {
+                performHaptic()
+                listener?.onSwitchImeRequested()
+            }
+            setOnLongClickListener {
+                performHaptic()
+                listener?.onShowImePickerRequested()
+                true
+            }
+        }
+        topBar.addView(switchImeButton, marginEndParams(4))
+
+        // Resize overlay trigger
         resizeButton = createTopChip("⤢").apply {
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
             setOnClickListener {
                 performHaptic()
                 listener?.onResizeToggleRequested()
@@ -211,7 +222,7 @@ class T9KeyboardView(context: Context) : LinearLayout(context) {
             )
         }
 
-        val starKey = createNumericKey("*", "Aa/Sím", onClick = {
+        val starKey = createNumericKey("*", "Aa · ?!", onClick = {
             performHaptic()
             listener?.onStarKey()
         }, onLongClick = {
@@ -224,7 +235,7 @@ class T9KeyboardView(context: Context) : LinearLayout(context) {
             marginEnd = dpToPx(5f)
         })
 
-        val zeroKey = createNumericKey("0", "␣", onClick = {
+        val zeroKey = createNumericKey("0", "ESPACIO", onClick = {
             performHaptic()
             listener?.onZeroKey()
         }, onLongClick = {
@@ -237,7 +248,7 @@ class T9KeyboardView(context: Context) : LinearLayout(context) {
             marginEnd = dpToPx(5f)
         })
 
-        val hashKey = createNumericKey("#", "Modo", onClick = {
+        val hashKey = createNumericKey("#", "MODO", onClick = {
             performHaptic()
             listener?.onHashKey()
         })
@@ -286,8 +297,8 @@ class T9KeyboardView(context: Context) : LinearLayout(context) {
             bottomMargin = dpToPx(5f)
         })
 
-        langButton = createActionKey("ES/EN").apply {
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+        langButton = createActionKey("ES / EN").apply {
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
             setOnClickListener {
                 performHaptic()
                 listener?.onQuickLanguageToggle()
@@ -350,8 +361,7 @@ class T9KeyboardView(context: Context) : LinearLayout(context) {
     }
 
     fun updateState(mode: InputMode, caseMode: CaseMode) {
-        modeBadge.text = mode.label
-        caseBadge.text = caseMode.label
+        statusBadge.text = "${mode.label} · ${caseMode.label}"
         langButton.text = when (mode) {
             InputMode.T9_ES -> "ES→EN"
             InputMode.T9_EN -> "EN→ES"
@@ -394,10 +404,13 @@ class T9KeyboardView(context: Context) : LinearLayout(context) {
             suggestionContainer.addView(fallbackChip, marginEndParams(6))
         } else {
             val hint = TextView(context).apply {
-                text = "Desliza ← borra palabra · → espacio"
+                text = "T9 · ⌨ Cambiar teclado"
                 setTextColor(ContextCompat.getColor(context, R.color.kb_text_secondary))
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f)
                 setPadding(dpToPx(6f), 0, dpToPx(6f), 0)
+                includeFontPadding = false
+                maxLines = 1
+                isSingleLine = true
             }
             suggestionContainer.addView(hint)
         }
@@ -436,6 +449,7 @@ class T9KeyboardView(context: Context) : LinearLayout(context) {
         return LinearLayout(context).apply {
             orientation = VERTICAL
             gravity = Gravity.CENTER
+            setPadding(0, dpToPx(2f), 0, dpToPx(2f))
             background = createKeyDrawable(
                 normalColor = ContextCompat.getColor(context, R.color.kb_key_bg),
                 pressedColor = ContextCompat.getColor(context, R.color.kb_key_pressed)
@@ -446,15 +460,20 @@ class T9KeyboardView(context: Context) : LinearLayout(context) {
             val mainTv = TextView(context).apply {
                 text = mainLabel
                 setTextColor(ContextCompat.getColor(context, R.color.kb_text_primary))
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
                 typeface = Typeface.DEFAULT_BOLD
                 gravity = Gravity.CENTER
+                includeFontPadding = false
             }
             val subTv = TextView(context).apply {
                 text = subLabel
                 setTextColor(ContextCompat.getColor(context, R.color.kb_text_secondary))
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 9.5f)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 8.5f)
+                maxLines = 1
+                isSingleLine = true
                 gravity = Gravity.CENTER
+                includeFontPadding = false
+                letterSpacing = 0.04f
             }
             addView(mainTv)
             addView(subTv)
@@ -478,9 +497,12 @@ class T9KeyboardView(context: Context) : LinearLayout(context) {
                 if (accent) ContextCompat.getColor(context, R.color.kb_accent)
                 else ContextCompat.getColor(context, R.color.kb_text_primary)
             )
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
+            includeFontPadding = false
+            maxLines = 1
+            isSingleLine = true
             background = createKeyDrawable(
                 normalColor = normalColor,
                 pressedColor = ContextCompat.getColor(context, R.color.kb_key_pressed)
@@ -497,16 +519,19 @@ class T9KeyboardView(context: Context) : LinearLayout(context) {
                 if (accent) ContextCompat.getColor(context, R.color.kb_accent)
                 else ContextCompat.getColor(context, R.color.kb_text_primary)
             )
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
-            setPadding(dpToPx(8f), dpToPx(5f), dpToPx(8f), dpToPx(5f))
+            includeFontPadding = false
+            maxLines = 1
+            isSingleLine = true
+            setPadding(dpToPx(7f), dpToPx(4f), dpToPx(7f), dpToPx(4f))
             background = GradientDrawable().apply {
                 setColor(
                     if (accent) ContextCompat.getColor(context, R.color.kb_accent_soft)
                     else ContextCompat.getColor(context, R.color.kb_surface)
                 )
-                cornerRadius = dpToPx(10f).toFloat()
+                cornerRadius = dpToPx(9f).toFloat()
             }
         }
     }
@@ -521,6 +546,9 @@ class T9KeyboardView(context: Context) : LinearLayout(context) {
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
             if (primary) typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
+            includeFontPadding = false
+            maxLines = 1
+            isSingleLine = true
             setPadding(dpToPx(10f), dpToPx(4f), dpToPx(10f), dpToPx(4f))
             background = GradientDrawable().apply {
                 setColor(

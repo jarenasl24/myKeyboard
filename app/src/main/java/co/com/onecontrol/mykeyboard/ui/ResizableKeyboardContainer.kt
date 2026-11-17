@@ -9,6 +9,7 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewOutlineProvider
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -29,6 +30,8 @@ class ResizableKeyboardContainer(context: Context) : FrameLayout(context) {
     private var alignment: KeyboardAlignment = KeyboardAlignment.RIGHT
     private var bottomMarginDp: Int = KeyboardConfig.DEFAULT_BOTTOM_MARGIN_DP
     private var isResizeMode: Boolean = false
+
+    private var navBarBottomInsetPx: Int = 0
 
     private val cardWrapper: FrameLayout
     private val contentSlot: FrameLayout
@@ -62,11 +65,23 @@ class ResizableKeyboardContainer(context: Context) : FrameLayout(context) {
         clipChildren = false
         clipToPadding = false
 
+        setOnApplyWindowInsetsListener { _, insets ->
+            @Suppress("DEPRECATION")
+            val bottom = insets.systemWindowInsetBottom
+            if (bottom != navBarBottomInsetPx) {
+                navBarBottomInsetPx = bottom
+                applyLayout()
+            }
+            insets
+        }
+
         cardWrapper = FrameLayout(context).apply {
             background = cardBg
             elevation = dpToPx(8f).toFloat()
-            clipChildren = false
-            clipToPadding = false
+            outlineProvider = ViewOutlineProvider.BACKGROUND
+            clipToOutline = true
+            clipChildren = true
+            clipToPadding = true
         }
 
         contentSlot = FrameLayout(context).apply {
@@ -339,7 +354,7 @@ class ResizableKeyboardContainer(context: Context) : FrameLayout(context) {
         }
         val sideMargin = if (widthPercent < 100) dpToPx(6f) else 0
         val params = LayoutParams(targetWidth, ViewGroup.LayoutParams.WRAP_CONTENT, gravity).apply {
-            bottomMargin = dpToPx(bottomMarginDp.toFloat())
+            bottomMargin = dpToPx(bottomMarginDp.toFloat()) + navBarBottomInsetPx
             topMargin = dpToPx(4f)
             marginStart = if (alignment == KeyboardAlignment.LEFT) sideMargin else 0
             marginEnd = if (alignment == KeyboardAlignment.RIGHT) sideMargin else 0
