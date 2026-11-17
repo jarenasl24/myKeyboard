@@ -55,6 +55,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
         fun onShowImePickerRequested()
         fun onClipboardRequested()
         fun onGeneratePasswordRequested()
+        fun onGifSelected(assetName: String, label: String)
     }
 
     var listener: Listener? = null
@@ -63,6 +64,9 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
     private var keyHeightDp: Int = KeyboardConfig.DEFAULT_KEY_HEIGHT_DP
 
     private val mainLayout: LinearLayout
+    private val topBar: LinearLayout
+    private val body: LinearLayout
+    private val emojiMediaPanel: co.com.onecontrol.mykeyboard.ui.emoji.EmojiMediaPanelView
     private val suggestionContainer: LinearLayout
     private val suggestionScroll: HorizontalScrollView
     private val statusBadge: TextView
@@ -135,7 +139,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
         }
 
         // 1. Top Suggestion + Control Bar
-        val topBar = LinearLayout(context).apply {
+        topBar = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dpToPx(2f), 0, dpToPx(2f), dpToPx(5f))
@@ -167,7 +171,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
             setOnClickListener {
                 performHaptic()
-                showEmojiStrip()
+                showEmojiPanel()
             }
         }
         topBar.addView(emojiButton, marginEndParams(4))
@@ -217,7 +221,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
         mainLayout.addView(topBar)
 
         // 2. Main Body: Left 3x4 numeric grid + Right action column
-        val body = LinearLayout(context).apply {
+        body = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -366,6 +370,36 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
 
         body.addView(rightCol)
         mainLayout.addView(body)
+
+        emojiMediaPanel = co.com.onecontrol.mykeyboard.ui.emoji.EmojiMediaPanelView(context).apply {
+            visibility = View.GONE
+            listener = object : co.com.onecontrol.mykeyboard.ui.emoji.EmojiMediaPanelView.Listener {
+                override fun onEmojiSelected(emoji: String) {
+                    listener?.onSymbolSelected(emoji)
+                }
+
+                override fun onKaomojiSelected(kaomoji: String) {
+                    listener?.onSymbolSelected(kaomoji)
+                }
+
+                override fun onGifSelected(assetName: String, label: String) {
+                    listener?.onGifSelected(assetName, label)
+                }
+
+                override fun onCloseEmojiPanel() {
+                    hideEmojiPanel()
+                }
+
+                override fun onBackspace() {
+                    listener?.onBackspace()
+                }
+
+                override fun onSpace() {
+                    listener?.onZeroKey()
+                }
+            }
+        }
+        mainLayout.addView(emojiMediaPanel)
         addView(mainLayout)
 
         // 3. Hold & Slide Symbol Popup Overlay for # (Floating Bar)
@@ -439,7 +473,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
                         val selected = commitSymbolPopupSelection()
                         if (selected == "😊") {
                             performHaptic()
-                            showEmojiStrip()
+                            showEmojiPanel()
                         } else if (selected != null) {
                             performHaptic()
                             listener?.onSymbolSelected(selected)
@@ -602,8 +636,24 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
                 row.layoutParams = lp
             }
         }
+        val targetPanelScrollHeight = (heightPx * 4 - dpToPx(36f)).coerceAtLeast(dpToPx(160f))
+        emojiMediaPanel.setPanelContentHeight(targetPanelScrollHeight)
         requestLayout()
     }
+
+    fun showEmojiPanel() {
+        topBar.visibility = View.GONE
+        body.visibility = View.GONE
+        emojiMediaPanel.visibility = View.VISIBLE
+    }
+
+    fun hideEmojiPanel() {
+        emojiMediaPanel.visibility = View.GONE
+        topBar.visibility = View.VISIBLE
+        body.visibility = View.VISIBLE
+    }
+
+    fun isEmojiPanelVisible(): Boolean = emojiMediaPanel.visibility == View.VISIBLE
 
     fun updateState(mode: InputMode, caseMode: CaseMode) {
         statusBadge.text = "${mode.label} · ${caseMode.label}"

@@ -111,6 +111,7 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
         multiTapEngine.reset()
         multiTapWordBuffer.clear()
         returnToT9AfterWord = null
+        keyboardView?.hideEmojiPanel()
 
         val inputType = info?.inputType ?: 0
         val inputClass = inputType and InputType.TYPE_MASK_CLASS
@@ -430,6 +431,69 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
     override fun onShowImePickerRequested() {
         val imm = getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager
         imm?.showInputMethodPicker()
+    }
+
+    override fun onGifSelected(assetName: String, label: String) {
+        commitGif(assetName, label)
+    }
+
+    private fun commitGif(assetName: String, label: String) {
+        val ic = currentInputConnection ?: return
+        val editorInfo = currentInputEditorInfo ?: return
+
+        try {
+            val cacheDir = java.io.File(cacheDir, "gifs")
+            if (!cacheDir.exists()) {
+                cacheDir.mkdirs()
+            }
+            val destFile = java.io.File(cacheDir, assetName)
+            if (!destFile.exists()) {
+                assets.open("gifs/$assetName").use { input ->
+                    destFile.outputStream().use { output ->
+                        input.copyTo(output)
+                    }
+                }
+            }
+
+            val contentUri = androidx.core.content.FileProvider.getUriForFile(
+                this,
+                "co.com.onecontrol.mykeyboard.fileprovider",
+                destFile
+            )
+
+            val description = android.content.ClipDescription(label, arrayOf("image/gif"))
+            val inputContentInfo = androidx.core.view.inputmethod.InputContentInfoCompat(
+                contentUri,
+                description,
+                null
+            )
+
+            var flags = 0
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N_MR1) {
+                flags = flags or androidx.core.view.inputmethod.InputConnectionCompat.INPUT_CONTENT_GRANT_READ_URI_PERMISSION
+            }
+
+            val committed = androidx.core.view.inputmethod.InputConnectionCompat.commitContent(
+                ic,
+                editorInfo,
+                inputContentInfo,
+                flags,
+                null
+            )
+
+            if (!committed) {
+                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                val clipData = android.content.ClipData.newUri(contentResolver, label, contentUri)
+                clipboard?.setPrimaryClip(clipData)
+                android.widget.Toast.makeText(
+                    this,
+                    "GIF copiado al portapapeles (la app no acepta inserción directa)",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+            }
+        } catch (e: Exception) {
+            android.widget.Toast.makeText(this, "Error al enviar GIF: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+        }
     }
 
     // --- Helpers ---
