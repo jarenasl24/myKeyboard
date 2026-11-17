@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">myKeyboard T9</string>
+    <string name="ime_name">myKeyboard T9 Clásico</string>
+    <string name="subtype_es">Español (T9)</string>
+    <string name="subtype_en">English (T9)</string>
+</resources>

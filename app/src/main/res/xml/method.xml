@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<input-method xmlns:android="http://schemas.android.com/apk/res/android"
+    android:settingsActivity="co.com.onecontrol.mykeyboard.ui.MainActivity"
+    android:supportsSwitchingToNextInputMethod="true">
+
+    <subtype
+        android:icon="@mipmap/ic_launcher"
+        android:imeSubtypeExtraValue="mode=T9_ES"
+        android:imeSubtypeLocale="es_ES"
+        android:imeSubtypeMode="keyboard"
+        android:label="@string/subtype_es" />
+
+    <subtype
+        android:icon="@mipmap/ic_launcher"
+        android:imeSubtypeExtraValue="mode=T9_EN"
+        android:imeSubtypeLocale="en_US"
+        android:imeSubtypeMode="keyboard"
+        android:label="@string/subtype_en" />
+
+</input-method>

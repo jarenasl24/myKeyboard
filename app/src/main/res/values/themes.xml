@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.MyKeyboard" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/kb_accent</item>
+        <item name="colorSecondary">@color/kb_accent_soft</item>
+    </style>
+</resources>
