@@ -61,6 +61,8 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
         fun onModeSelected(mode: InputMode)
         fun onSwipeType(digits: String)
         fun onCalculatorSelected(expression: String, result: String)
+        fun onShortcutSelected(expansion: String)
+        fun onShortcutsRequested()
     }
 
     var listener: Listener? = null
@@ -204,12 +206,17 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
             gravity = Gravity.CENTER_VERTICAL
         }
 
-        // Clipboard history button
+        // Clipboard history button (Tap = Clipboard, Hold = Text Expander Shortcuts)
         clipboardButton = createTopChip("📋").apply {
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
             setOnClickListener {
                 performHaptic()
                 listener?.onClipboardRequested()
+            }
+            setOnLongClickListener {
+                performHaptic()
+                listener?.onShortcutsRequested()
+                true
             }
         }
         utilityControlsLayout.addView(clipboardButton, marginEndParams(4))
@@ -1036,7 +1043,8 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
         suggestions: List<String>,
         hasPendingDigits: Boolean,
         digits: String,
-        calculatorResult: co.com.onecontrol.mykeyboard.engine.MathEvaluator.CalculationResult? = null
+        calculatorResult: co.com.onecontrol.mykeyboard.engine.MathEvaluator.CalculationResult? = null,
+        shortcuts: List<co.com.onecontrol.mykeyboard.dictionary.TextShortcut> = emptyList()
     ) {
         lastSuggestions = suggestions
         suggestionContainer.removeAllViews()
@@ -1045,7 +1053,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
         if (hasPendingDigits) {
             // Typing mode: collapse utility buttons to give 100% of topBar to suggestions!
             utilityControlsLayout.visibility = View.GONE
-            if (suggestions.size >= 3) {
+            if (suggestions.size >= 3 || shortcuts.isNotEmpty()) {
                 expandButton.visibility = View.VISIBLE
                 expandButton.text = if (isCandidateGridVisible()) "▲" else "▼"
             } else {
@@ -1057,6 +1065,16 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
             utilityControlsLayout.visibility = View.VISIBLE
             expandButton.visibility = View.GONE
             hideCandidateGrid()
+        }
+
+        // Text Expander Shortcuts (e.g. ⚡ micorreo -> usuario@gmail.com)
+        shortcuts.forEach { sc ->
+            val scChip = createSuggestionChip("⚡ ${sc.expansion}", primary = true) {
+                performStrongHaptic()
+                hideCandidateGrid()
+                listener?.onShortcutSelected(sc.expansion)
+            }
+            suggestionContainer.addView(scChip, marginEndParams(6))
         }
 
         // Calculator chip (if math expression detected in text)
@@ -1206,6 +1224,31 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
                     performHaptic()
                     utilityControlsLayout.visibility = View.VISIBLE
                     listener?.onSymbolSelected(item)
+                }
+                suggestionContainer.addView(chip, marginEndParams(6))
+            }
+        }
+        suggestionScroll.scrollTo(0, 0)
+    }
+
+    fun showShortcutsStrip(shortcuts: List<co.com.onecontrol.mykeyboard.dictionary.TextShortcut>) {
+        prepareStripWithCloseChip()
+        if (shortcuts.isEmpty()) {
+            val emptyTv = TextView(context).apply {
+                text = "Sin atajos guardados (configura en la app)"
+                setTextColor(ContextCompat.getColor(context, R.color.kb_text_secondary))
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                setPadding(dpToPx(8f), 0, dpToPx(8f), 0)
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            suggestionContainer.addView(emptyTv)
+        } else {
+            shortcuts.forEach { sc ->
+                val label = "⚡ ${sc.shortcut}: ${if (sc.expansion.length > 18) sc.expansion.take(16) + "…" else sc.expansion}"
+                val chip = createSuggestionChip(label, primary = false) {
+                    performStrongHaptic()
+                    utilityControlsLayout.visibility = View.VISIBLE
+                    listener?.onShortcutSelected(sc.expansion)
                 }
                 suggestionContainer.addView(chip, marginEndParams(6))
             }

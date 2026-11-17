@@ -142,5 +142,37 @@
             android:text="Restablecer dimensiones ergonómicas"
             app:cornerRadius="12dp" />
 
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:text="5. Atajos de texto (Text Expander)"
+            android:textColor="@color/kb_text_primary"
+            android:textSize="15sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Escribe el atajo en T9 o ABC (ej: micorreo) y aparecerá el texto expandido ⚡ para insertarlo de inmediato."
+            android:textColor="@color/kb_text_secondary"
+            android:textSize="13sp" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnAddShortcut"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text="➕ Agregar nuevo atajo"
+            app:cornerRadius="12dp" />
+
+        <LinearLayout
+            android:id="@+id/layoutShortcutsList"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:orientation="vertical" />
+
     </LinearLayout>
 </ScrollView>

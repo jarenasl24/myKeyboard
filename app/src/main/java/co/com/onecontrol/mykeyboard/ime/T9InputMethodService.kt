@@ -34,6 +34,7 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
     private lateinit var dictionary: T9DictionaryTrie
     private lateinit var t9Engine: T9PredictiveEngine
     private lateinit var multiTapEngine: MultiTapEngine
+    private lateinit var shortcutStore: co.com.onecontrol.mykeyboard.dictionary.TextShortcutStore
 
     private var container: ResizableKeyboardContainer? = null
     private var keyboardView: T9KeyboardView? = null
@@ -49,8 +50,12 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
     override fun onCreate() {
         super.onCreate()
         preferences = KeyboardPreferences(applicationContext)
+        shortcutStore = co.com.onecontrol.mykeyboard.dictionary.TextShortcutStore(applicationContext)
         dictionary = T9DictionaryTrie(applicationContext)
         dictionary.loadAsync {
+            shortcutStore.getAllShortcuts().forEach { sc ->
+                dictionary.learnWord(T9DictionaryTrie.Language.ES, sc.shortcut)
+            }
             refreshT9Suggestions()
         }
         t9Engine = T9PredictiveEngine(dictionary)
@@ -510,6 +515,25 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
         keyboardView?.showClipboardStrip(items.distinct().take(6))
     }
 
+    override fun onShortcutSelected(expansion: String) {
+        val ic = currentInputConnection ?: return
+        if (inputMode == InputMode.MULTI_TAP) {
+            val bufLen = multiTapWordBuffer.length
+            if (bufLen > 0) {
+                ic.deleteSurroundingText(bufLen, 0)
+                multiTapWordBuffer.clear()
+            }
+        }
+        ic.commitText("$expansion ", 1)
+        t9Engine.clear()
+        applyAutoCapIfSentenceEnd(ic)
+        refreshT9Suggestions()
+    }
+
+    override fun onShortcutsRequested() {
+        keyboardView?.showShortcutsStrip(shortcutStore.getAllShortcuts())
+    }
+
     override fun onGeneratePasswordRequested() {
         val ic = currentInputConnection ?: return
         val upper = "ABCDEFGHJKLMNPQRSTUVWXYZ"
@@ -641,12 +665,17 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
         val mathResult = MathEvaluator.findMathExpression(before)
 
         if (inputMode != InputMode.T9_ES && inputMode != InputMode.T9_EN) {
-            if (mathResult != null) {
+            val matchingShortcuts = if (multiTapWordBuffer.isNotEmpty()) {
+                shortcutStore.findMatchesForWord(multiTapWordBuffer.toString())
+            } else emptyList()
+
+            if (mathResult != null || matchingShortcuts.isNotEmpty()) {
                 keyboardView?.showSuggestions(
                     suggestions = emptyList(),
-                    hasPendingDigits = false,
+                    hasPendingDigits = matchingShortcuts.isNotEmpty(),
                     digits = "",
-                    calculatorResult = mathResult
+                    calculatorResult = mathResult,
+                    shortcuts = matchingShortcuts
                 )
             } else {
                 keyboardView?.showSuggestions(emptyList(), false, "")
@@ -670,11 +699,13 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
                 suggestions = nextWords,
                 hasPendingDigits = false,
                 digits = "",
-                calculatorResult = mathResult
+                calculatorResult = mathResult,
+                shortcuts = emptyList()
             )
             return
         }
 
+        val matchingShortcuts = shortcutStore.findMatchesForDigits(t9Engine.currentDigits)
         val suggestions = t9Engine.getSuggestions(inputMode.toLanguage(), caseMode)
         val fallbackText = caseMode.applyToWord(T9KeyMap.digitsToDefaultLetters(t9Engine.currentDigits))
         val preview = suggestions.firstOrNull() ?: fallbackText
@@ -683,7 +714,8 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
             suggestions = suggestions,
             hasPendingDigits = true,
             digits = t9Engine.currentDigits,
-            calculatorResult = null
+            calculatorResult = null,
+            shortcuts = matchingShortcuts
         )
     }
 
