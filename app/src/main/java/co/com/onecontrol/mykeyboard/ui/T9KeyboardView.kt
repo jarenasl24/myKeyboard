@@ -88,6 +88,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
     private val resizeButton: TextView
     private val enterButton: TextView
     private val modeButton: TextView
+    private val symbolsButton: TextView
     private val backspaceButton: TextView
     private var lastSuggestions: List<String> = emptyList()
 
@@ -567,6 +568,26 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
             bottomMargin = dpToPx(5f)
         })
 
+        // Dedicated Symbols Button: Quick tap opens symbol strip, Long press opens Emoji panel
+        symbolsButton = createActionKey("SÍM").apply {
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            setOnClickListener {
+                performHaptic()
+                showSymbolStrip()
+            }
+            setOnLongClickListener {
+                performHaptic()
+                showEmojiPanel()
+                true
+            }
+        }
+        actionButtons.add(symbolsButton)
+        rightCol.addView(symbolsButton, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
+        ).apply {
+            bottomMargin = dpToPx(5f)
+        })
+
         modeButton = createActionKey("ABC").apply {
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             setOnClickListener {
@@ -589,7 +610,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
         }
         actionButtons.add(enterButton)
         rightCol.addView(enterButton, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, 0, 2f
+            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
         ))
 
         body.addView(rightCol)
