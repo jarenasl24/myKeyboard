@@ -375,15 +375,15 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
             visibility = View.GONE
             listener = object : co.com.onecontrol.mykeyboard.ui.emoji.EmojiMediaPanelView.Listener {
                 override fun onEmojiSelected(emoji: String) {
-                    listener?.onSymbolSelected(emoji)
+                    this@T9KeyboardView.listener?.onSymbolSelected(emoji)
                 }
 
                 override fun onKaomojiSelected(kaomoji: String) {
-                    listener?.onSymbolSelected(kaomoji)
+                    this@T9KeyboardView.listener?.onSymbolSelected(kaomoji)
                 }
 
                 override fun onGifSelected(assetName: String, label: String) {
-                    listener?.onGifSelected(assetName, label)
+                    this@T9KeyboardView.listener?.onGifSelected(assetName, label)
                 }
 
                 override fun onCloseEmojiPanel() {
@@ -391,11 +391,11 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
                 }
 
                 override fun onBackspace() {
-                    listener?.onBackspace()
+                    this@T9KeyboardView.listener?.onBackspace()
                 }
 
                 override fun onSpace() {
-                    listener?.onZeroKey()
+                    this@T9KeyboardView.listener?.onZeroKey()
                 }
             }
         }
