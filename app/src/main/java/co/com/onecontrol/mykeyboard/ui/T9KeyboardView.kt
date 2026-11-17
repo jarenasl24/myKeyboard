@@ -189,10 +189,10 @@ class T9KeyboardView(context: Context) : LinearLayout(context) {
                 }
             }
             rowItems.forEach { (digit, sub) ->
-                val key = createNumericKey(digit.toString(), sub) {
+                val key = createNumericKey(digit.toString(), sub, onClick = {
                     performHaptic()
                     listener?.onDigitKey(digit)
-                }
+                })
                 keyViews.add(key)
                 row.addView(key, LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
                     marginEnd = dpToPx(5f)
@@ -237,10 +237,10 @@ class T9KeyboardView(context: Context) : LinearLayout(context) {
             marginEnd = dpToPx(5f)
         })
 
-        val hashKey = createNumericKey("#", "Modo") {
+        val hashKey = createNumericKey("#", "Modo", onClick = {
             performHaptic()
             listener?.onHashKey()
-        }
+        })
         keyViews.add(hashKey)
         bottomRow.addView(hashKey, LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
             marginEnd = dpToPx(5f)
