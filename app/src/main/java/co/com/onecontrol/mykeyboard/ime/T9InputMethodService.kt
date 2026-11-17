@@ -6,13 +6,16 @@ import android.text.InputType
 import android.view.KeyEvent
 import android.view.View
 import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.ExtractedTextRequest
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
 import co.com.onecontrol.mykeyboard.dictionary.T9DictionaryTrie
 import co.com.onecontrol.mykeyboard.dictionary.T9KeyMap
 import co.com.onecontrol.mykeyboard.engine.CaseMode
 import co.com.onecontrol.mykeyboard.engine.InputMode
+import co.com.onecontrol.mykeyboard.engine.MathEvaluator
 import co.com.onecontrol.mykeyboard.engine.MultiTapEngine
+import co.com.onecontrol.mykeyboard.engine.NextWordPredictor
 import co.com.onecontrol.mykeyboard.engine.T9PredictiveEngine
 import co.com.onecontrol.mykeyboard.ui.ResizableKeyboardContainer
 import co.com.onecontrol.mykeyboard.ui.T9KeyboardView
@@ -40,6 +43,7 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
     private var caseMode = CaseMode.CAPITALIZE
     private var lastT9LanguageMode = InputMode.T9_ES
     private var returnToT9AfterWord: InputMode? = null
+    private var lastCommittedWord: String? = null
     private val multiTapWordBuffer = StringBuilder()
 
     override fun onCreate() {
@@ -111,6 +115,7 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
         multiTapEngine.reset()
         multiTapWordBuffer.clear()
         returnToT9AfterWord = null
+        lastCommittedWord = null
         keyboardView?.hideEmojiPanel()
 
         val inputType = info?.inputType ?: 0
@@ -150,7 +155,7 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
             isEmailField -> keyboardView?.showEmailDomainStrip()
             isPasswordField -> keyboardView?.showPasswordHelpStrip()
             isUrlField -> keyboardView?.showUrlShortcutsStrip()
-            else -> keyboardView?.showSuggestions(emptyList(), false, "")
+            else -> refreshT9Suggestions()
         }
     }
 
@@ -362,6 +367,10 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
 
     override fun onSuggestionSelected(word: String) {
         val ic = currentInputConnection ?: return
+        if (lastCommittedWord != null) {
+            dictionary.recordWordPair(inputMode.toLanguage(), lastCommittedWord!!, word)
+        }
+        lastCommittedWord = word
         ic.commitText("$word ", 1)
         t9Engine.learnWord(inputMode.toLanguage(), word)
         t9Engine.clear()
@@ -428,6 +437,10 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
                 val primary = t9Engine.getPrimarySuggestion(inputMode.toLanguage(), caseMode)
                 if (primary != null) {
                     t9Engine.learnWord(inputMode.toLanguage(), primary)
+                    if (lastCommittedWord != null) {
+                        dictionary.recordWordPair(inputMode.toLanguage(), lastCommittedWord!!, primary)
+                    }
+                    lastCommittedWord = primary
                 }
                 t9Engine.clear()
             }
@@ -435,11 +448,52 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
                 multiTapEngine.reset()
             }
             multiTapWordBuffer.clear()
-            keyboardView?.showSuggestions(emptyList(), false, "")
+            refreshT9Suggestions()
         }
-        val keycode = if (delta > 0) KeyEvent.KEYCODE_DPAD_RIGHT else KeyEvent.KEYCODE_DPAD_LEFT
-        ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keycode))
-        ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keycode))
+        val extracted = try {
+            ic.getExtractedText(ExtractedTextRequest(), 0)
+        } catch (_: Exception) {
+            null
+        }
+        if (extracted != null && extracted.selectionStart >= 0) {
+            val cur = extracted.selectionStart
+            val newPos = (cur + delta).coerceIn(0, extracted.text.length)
+            ic.setSelection(newPos, newPos)
+        } else {
+            val keycode = if (delta > 0) KeyEvent.KEYCODE_DPAD_RIGHT else KeyEvent.KEYCODE_DPAD_LEFT
+            ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keycode))
+            ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keycode))
+        }
+    }
+
+    override fun onSwipeType(digits: String) {
+        val ic = currentInputConnection ?: return
+        if (inputMode != InputMode.T9_ES && inputMode != InputMode.T9_EN) return
+        if (digits.length < 2) return
+        commitT9Composing(ic, learn = true)
+        t9Engine.clear()
+        for (ch in digits) {
+            t9Engine.appendDigit(ch)
+        }
+        refreshT9Suggestions()
+    }
+
+    override fun onCalculatorSelected(expression: String, result: String) {
+        val ic = currentInputConnection ?: return
+        val before = ic.getTextBeforeCursor(expression.length + 4, 0)?.toString() ?: ""
+        if (before.trimEnd().endsWith("=")) {
+            ic.commitText(" $result ", 1)
+        } else {
+            val idx = before.lastIndexOf(expression)
+            if (idx >= 0) {
+                val deleteCount = before.length - idx
+                ic.deleteSurroundingText(deleteCount, 0)
+                ic.commitText("$result ", 1)
+            } else {
+                ic.commitText(" = $result ", 1)
+            }
+        }
+        refreshT9Suggestions()
     }
 
     override fun onClipboardRequested() {
@@ -584,14 +638,44 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
 
     private fun refreshT9Suggestions() {
         val ic = currentInputConnection
+        val before = ic?.getTextBeforeCursor(60, 0)?.toString() ?: ""
+        val mathResult = MathEvaluator.findMathExpression(before)
+
         if (inputMode != InputMode.T9_ES && inputMode != InputMode.T9_EN) {
-            keyboardView?.showSuggestions(emptyList(), false, "")
+            if (mathResult != null) {
+                keyboardView?.showSuggestions(
+                    suggestions = emptyList(),
+                    hasPendingDigits = false,
+                    digits = "",
+                    calculatorResult = mathResult
+                )
+            } else {
+                keyboardView?.showSuggestions(emptyList(), false, "")
+            }
             return
         }
+
         if (t9Engine.isEmpty()) {
-            keyboardView?.showSuggestions(emptyList(), false, "")
+            val lastWord = before.trimEnd().split(Regex("\\s+")).lastOrNull() ?: ""
+            val nextWords = if (lastWord.isNotEmpty()) {
+                NextWordPredictor.predict(
+                    language = inputMode.toLanguage().code,
+                    prevWord = lastWord,
+                    userStore = dictionary.userStore
+                )
+            } else {
+                emptyList()
+            }
+
+            keyboardView?.showSuggestions(
+                suggestions = nextWords,
+                hasPendingDigits = false,
+                digits = "",
+                calculatorResult = mathResult
+            )
             return
         }
+
         val suggestions = t9Engine.getSuggestions(inputMode.toLanguage(), caseMode)
         val fallbackText = caseMode.applyToWord(T9KeyMap.digitsToDefaultLetters(t9Engine.currentDigits))
         val preview = suggestions.firstOrNull() ?: fallbackText
@@ -599,7 +683,8 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
         keyboardView?.showSuggestions(
             suggestions = suggestions,
             hasPendingDigits = true,
-            digits = t9Engine.currentDigits
+            digits = t9Engine.currentDigits,
+            calculatorResult = null
         )
     }
 
@@ -609,6 +694,10 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
         val fallbackText = caseMode.applyToWord(T9KeyMap.digitsToDefaultLetters(t9Engine.currentDigits))
         val toCommit = primary ?: fallbackText
         ic.commitText(toCommit, 1)
+        if (lastCommittedWord != null && primary != null) {
+            dictionary.recordWordPair(inputMode.toLanguage(), lastCommittedWord!!, primary)
+        }
+        lastCommittedWord = primary ?: toCommit
         if (learn && primary != null) {
             t9Engine.learnWord(inputMode.toLanguage(), primary)
         }

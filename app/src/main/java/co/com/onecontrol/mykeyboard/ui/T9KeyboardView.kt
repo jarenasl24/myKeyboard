@@ -59,6 +59,8 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
         fun onGifSelected(assetName: String, label: String)
         fun onTogglePredictiveMode()
         fun onModeSelected(mode: InputMode)
+        fun onSwipeType(digits: String)
+        fun onCalculatorSelected(expression: String, result: String)
     }
 
     var listener: Listener? = null
@@ -315,7 +317,10 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
 
         val leftGrid = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 3f)
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
         }
 
         val rowsSpec = listOf(
@@ -372,7 +377,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
         })
 
         // Key 0: Space + Cursor trackpad slider
-        val zeroKey = createNumericKey("0", "ESPACIO")
+        val zeroKey = createNumericKey("0", "◄ ESPACIO ►")
         setupZeroCursorTrackpad(zeroKey)
         keyViews.add(zeroKey)
         bottomRow.addView(zeroKey, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
@@ -389,7 +394,106 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
 
         keypadRows.add(bottomRow)
         leftGrid.addView(bottomRow)
-        body.addView(leftGrid)
+
+        val gestureTrailView = GestureTrailView(context).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            visibility = View.GONE
+        }
+
+        val leftGridContainer = object : FrameLayout(context) {
+            private var startX = 0f
+            private var startY = 0f
+            private var isSwiping = false
+            private val swipeDigits = StringBuilder()
+            private var lastDigit: Char? = null
+
+            private fun getDigitAt(x: Float, y: Float): Char? {
+                val w = width.toFloat()
+                val h = height.toFloat()
+                if (w <= 0 || h <= 0) return null
+                val col = (x / (w / 3f)).toInt().coerceIn(0, 2)
+                val row = (y / (h / 4f)).toInt().coerceIn(0, 3)
+                val grid = arrayOf(
+                    charArrayOf('1', '2', '3'),
+                    charArrayOf('4', '5', '6'),
+                    charArrayOf('7', '8', '9'),
+                    charArrayOf('*', '0', '#')
+                )
+                val ch = grid[row][col]
+                return if (ch in '1'..'9') ch else null
+            }
+
+            override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
+                if (currentInputMode != InputMode.T9_ES && currentInputMode != InputMode.T9_EN) {
+                    return false
+                }
+                when (ev.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        startX = ev.x
+                        startY = ev.y
+                        isSwiping = false
+                        swipeDigits.clear()
+                        lastDigit = getDigitAt(ev.x, ev.y)
+                        if (lastDigit != null) {
+                            swipeDigits.append(lastDigit)
+                        }
+                        return false
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        val dist = kotlin.math.hypot(ev.x - startX, ev.y - startY)
+                        if (dist > dpToPx(18f)) {
+                            isSwiping = true
+                            parent?.requestDisallowInterceptTouchEvent(true)
+                            gestureTrailView.startTrail(ev.x, ev.y)
+                            val d = getDigitAt(ev.x, ev.y)
+                            if (d != null && d != lastDigit) {
+                                swipeDigits.append(d)
+                                lastDigit = d
+                                performHaptic()
+                            }
+                            return true
+                        }
+                    }
+                }
+                return false
+            }
+
+            @SuppressLint("ClickableViewAccessibility")
+            override fun onTouchEvent(ev: MotionEvent): Boolean {
+                if (!isSwiping) return super.onTouchEvent(ev)
+                when (ev.actionMasked) {
+                    MotionEvent.ACTION_MOVE -> {
+                        gestureTrailView.addPoint(ev.x, ev.y)
+                        val d = getDigitAt(ev.x, ev.y)
+                        if (d != null && d != lastDigit) {
+                            swipeDigits.append(d)
+                            lastDigit = d
+                            performHaptic()
+                        }
+                        return true
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        isSwiping = false
+                        gestureTrailView.finishTrail()
+                        if (ev.actionMasked == MotionEvent.ACTION_UP && swipeDigits.length >= 2) {
+                            performStrongHaptic()
+                            listener?.onSwipeType(swipeDigits.toString())
+                        }
+                        return true
+                    }
+                }
+                return super.onTouchEvent(ev)
+            }
+        }.apply {
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 3f)
+        }
+
+        leftGridContainer.addView(leftGrid)
+        leftGridContainer.addView(gestureTrailView)
+        body.addView(leftGridContainer)
 
         // Right Action Column
         val rightCol = LinearLayout(context).apply {
@@ -397,17 +501,32 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
         }
 
-        // Backspace: Tap deletes char; Hold > 280ms deletes whole word and repeats word by word with strong haptic pulse!
+        // Backspace: Tap deletes char; Swipe Left deletes whole word; Hold > 280ms deletes words repeatedly!
         backspaceButton = createActionKey("⌫").apply {
+            var downX = 0f
+            var isSwiped = false
             setOnTouchListener { v, event ->
                 when (event.actionMasked) {
                     MotionEvent.ACTION_DOWN -> {
                         v.isPressed = true
                         isBackspacePressed = true
+                        downX = event.x
+                        isSwiped = false
+                        v.parent?.requestDisallowInterceptTouchEvent(true)
                         performHaptic()
                         listener?.onBackspace()
                         repeatHandler.removeCallbacks(wordDeleteRepeater)
                         repeatHandler.postDelayed(wordDeleteRepeater, 280L)
+                        true
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        val dx = event.x - downX
+                        if (!isSwiped && dx < -dpToPx(24f)) {
+                            isSwiped = true
+                            repeatHandler.removeCallbacks(wordDeleteRepeater)
+                            performStrongHaptic()
+                            listener?.onSwipeDeleteWord()
+                        }
                         true
                     }
                     MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
@@ -605,16 +724,18 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
                     isDraggingCursor = false
                     isLongPress = false
                     zeroKey.isPressed = true
+                    zeroKey.parent?.requestDisallowInterceptTouchEvent(true)
                     repeatHandler.postDelayed(longPressRunnable, 400L)
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val totalDx = event.x - downX
-                    if (abs(totalDx) > dpToPx(16f)) {
+                    if (abs(totalDx) > dpToPx(12f)) {
                         repeatHandler.removeCallbacks(longPressRunnable)
                         isDraggingCursor = true
+                        zeroKey.parent?.requestDisallowInterceptTouchEvent(true)
                         val stepDx = event.x - lastX
-                        val stepThreshold = dpToPx(14f)
+                        val stepThreshold = dpToPx(11f)
                         if (abs(stepDx) >= stepThreshold) {
                             val delta = if (stepDx > 0) 1 else -1
                             listener?.onMoveCursor(delta)
@@ -854,7 +975,8 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
     fun showSuggestions(
         suggestions: List<String>,
         hasPendingDigits: Boolean,
-        digits: String
+        digits: String,
+        calculatorResult: co.com.onecontrol.mykeyboard.engine.MathEvaluator.CalculationResult? = null
     ) {
         lastSuggestions = suggestions
         suggestionContainer.removeAllViews()
@@ -876,9 +998,19 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
             hideCandidateGrid()
         }
 
+        // Calculator chip (if math expression detected in text)
+        if (calculatorResult != null) {
+            val calcChip = createSuggestionChip("🧮 = ${calculatorResult.formattedResult}", primary = true) {
+                performStrongHaptic()
+                listener?.onCalculatorSelected(calculatorResult.expression, calculatorResult.formattedResult)
+            }
+            suggestionContainer.addView(calcChip, marginEndParams(6))
+        }
+
         if (suggestions.isNotEmpty()) {
             suggestions.forEachIndexed { index, word ->
-                val chip = createSuggestionChip(word, primary = index == 0) {
+                val isFirstInTyping = hasPendingDigits && index == 0
+                val chip = createSuggestionChip(word, primary = isFirstInTyping) {
                     performHaptic()
                     hideCandidateGrid()
                     listener?.onSuggestionSelected(word)
@@ -900,11 +1032,11 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
                 listener?.onFallbackMultiTapRequested()
             }
             suggestionContainer.addView(fallbackChip, marginEndParams(6))
-        } else {
+        } else if (calculatorResult == null) {
             val hintText = if (currentInputMode == InputMode.MULTI_TAP) {
                 "Modo ABC (multitap) · Toca T9 para volver"
             } else {
-                "T9 · Mantén # para símbolos @"
+                "◄ Desliza 0 para mover cursor ►"
             }
             val hint = TextView(context).apply {
                 text = hintText

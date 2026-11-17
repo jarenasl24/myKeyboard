@@ -32,7 +32,7 @@ class T9DictionaryTrie(private val context: Context) {
         put(Language.EN, TrieNode())
     }
 
-    private val userStore = UserDictionaryStore(context.applicationContext)
+    val userStore = UserDictionaryStore(context.applicationContext)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     @Volatile
@@ -131,6 +131,12 @@ class T9DictionaryTrie(private val context: Context) {
         insertIntoTrie(root, clean, 6500)
         scope.launch {
             userStore.saveOrBoostWord(language.code, clean)
+        }
+    }
+
+    fun recordWordPair(language: Language, prevWord: String, nextWord: String) {
+        scope.launch {
+            userStore.recordBigram(language.code, prevWord, nextWord)
         }
     }
 }
