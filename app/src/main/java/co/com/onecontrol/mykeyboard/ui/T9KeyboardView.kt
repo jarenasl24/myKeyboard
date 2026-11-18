@@ -63,6 +63,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
         fun onCalculatorSelected(expression: String, result: String)
         fun onShortcutSelected(expansion: String)
         fun onShortcutsRequested()
+        fun onDirectCommit(text: String)
     }
 
     var listener: Listener? = null
@@ -70,6 +71,15 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
     private var hapticStrength: Int = KeyboardConfig.DEFAULT_HAPTIC_STRENGTH
     private var keyHeightDp: Int = KeyboardConfig.DEFAULT_KEY_HEIGHT_DP
     private var currentInputMode: InputMode = InputMode.T9_ES
+    private var currentCaseMode: CaseMode = CaseMode.CAPITALIZE
+
+    private var activePopup: android.widget.PopupWindow? = null
+    private var isCalculatorActive = false
+    private var calcExpression = ""
+    private var calcCurrentResult = ""
+    private lateinit var calcKeypadPanel: LinearLayout
+    private val calcKeypadRows = mutableListOf<LinearLayout>()
+    private lateinit var calcButton: TextView
 
     private val mainLayout: LinearLayout
     private val topBar: LinearLayout
@@ -258,7 +268,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
             setOnClickListener {
                 performHaptic()
-                listener?.onShowImePickerRequested()
+                listener?.onSwitchImeRequested()
             }
             setOnLongClickListener {
                 performHaptic()
@@ -267,6 +277,16 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
             }
         }
         utilityControlsLayout.addView(switchImeButton, marginEndParams(4))
+
+        // Calculator toggle button
+        calcButton = createTopChip("🧮").apply {
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            setOnClickListener {
+                performHaptic()
+                toggleCalculatorMode()
+            }
+        }
+        utilityControlsLayout.addView(calcButton, marginEndParams(4))
 
         // Resize overlay trigger
         resizeButton = createTopChip("⤢").apply {
@@ -361,10 +381,21 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
                 }
             }
             rowItems.forEach { (digit, sub) ->
-                val key = createNumericKey(digit.toString(), sub, onClick = {
-                    performHaptic()
-                    listener?.onDigitKey(digit)
-                })
+                var keyViewRef: View? = null
+                val key = createNumericKey(
+                    mainLabel = digit.toString(),
+                    subLabel = sub,
+                    onClick = {
+                        performHaptic()
+                        listener?.onDigitKey(digit)
+                    },
+                    onLongClick = {
+                        performHaptic()
+                        keyViewRef?.let { anchor -> showKeyOptions(digit, anchor) }
+                        true
+                    }
+                )
+                keyViewRef = key
                 keyViews.add(key)
                 row.addView(key, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
                     marginEnd = dpToPx(5f)
@@ -428,6 +459,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
             private var startX = 0f
             private var startY = 0f
             private var isSwiping = false
+            private var isHorizontalSwipe = false
             private val swipeDigits = StringBuilder()
             private var lastDigit: Char? = null
 
@@ -448,9 +480,6 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
             }
 
             override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
-                if (currentInputMode != InputMode.T9_ES && currentInputMode != InputMode.T9_EN) {
-                    return false
-                }
                 val h = height.toFloat()
                 if (h > 0 && (ev.y / (h / 4f)).toInt() >= 3) {
                     // Row 3 (*, 0, #) has its own dedicated trackpad and symbol popup touch handlers!
@@ -461,6 +490,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
                         startX = ev.x
                         startY = ev.y
                         isSwiping = false
+                        isHorizontalSwipe = false
                         swipeDigits.clear()
                         lastDigit = getDigitAt(ev.x, ev.y)
                         if (lastDigit != null) {
@@ -472,18 +502,32 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
                         if (h > 0 && (startY / (h / 4f)).toInt() >= 3) {
                             return false
                         }
-                        val dist = kotlin.math.hypot(ev.x - startX, ev.y - startY)
-                        if (dist > dpToPx(18f)) {
+                        val dx = ev.x - startX
+                        val dy = ev.y - startY
+                        val dist = kotlin.math.hypot(dx, dy)
+
+                        // 1. Horizontal swipe across numbers (Left = delete word, Right = space)
+                        if (abs(dx) > dpToPx(32f) && abs(dx) > abs(dy) * 1.4f) {
+                            isHorizontalSwipe = true
                             isSwiping = true
                             parent?.requestDisallowInterceptTouchEvent(true)
-                            gestureTrailView.startTrail(ev.x, ev.y)
-                            val d = getDigitAt(ev.x, ev.y)
-                            if (d != null && d != lastDigit) {
-                                swipeDigits.append(d)
-                                lastDigit = d
-                                performHaptic()
-                            }
                             return true
+                        }
+
+                        // 2. Glide typing in T9 mode
+                        if (currentInputMode == InputMode.T9_ES || currentInputMode == InputMode.T9_EN) {
+                            if (dist > dpToPx(18f)) {
+                                isSwiping = true
+                                parent?.requestDisallowInterceptTouchEvent(true)
+                                gestureTrailView.startTrail(ev.x, ev.y)
+                                val d = getDigitAt(ev.x, ev.y)
+                                if (d != null && d != lastDigit) {
+                                    swipeDigits.append(d)
+                                    lastDigit = d
+                                    performHaptic()
+                                }
+                                return true
+                            }
                         }
                     }
                 }
@@ -495,22 +539,41 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
                 if (!isSwiping) return super.onTouchEvent(ev)
                 when (ev.actionMasked) {
                     MotionEvent.ACTION_MOVE -> {
-                        gestureTrailView.addPoint(ev.x, ev.y)
-                        val d = getDigitAt(ev.x, ev.y)
-                        if (d != null && d != lastDigit) {
-                            swipeDigits.append(d)
-                            lastDigit = d
-                            performHaptic()
+                        if (!isHorizontalSwipe) {
+                            gestureTrailView.addPoint(ev.x, ev.y)
+                            val d = getDigitAt(ev.x, ev.y)
+                            if (d != null && d != lastDigit) {
+                                swipeDigits.append(d)
+                                lastDigit = d
+                                performHaptic()
+                            }
                         }
                         return true
                     }
                     MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                         isSwiping = false
                         gestureTrailView.finishTrail()
-                        if (ev.actionMasked == MotionEvent.ACTION_UP && swipeDigits.length >= 2) {
-                            performStrongHaptic()
-                            listener?.onSwipeType(swipeDigits.toString())
+                        if (ev.actionMasked == MotionEvent.ACTION_UP) {
+                            if (isHorizontalSwipe) {
+                                val dx = ev.x - startX
+                                if (abs(dx) > dpToPx(35f)) {
+                                    performStrongHaptic()
+                                    if (dx < 0) {
+                                        listener?.onSwipeDeleteWord()
+                                    } else {
+                                        listener?.onSwipeSpace()
+                                    }
+                                }
+                                isHorizontalSwipe = false
+                                return true
+                            }
+                            if (swipeDigits.length >= 2) {
+                                performStrongHaptic()
+                                listener?.onSwipeType(swipeDigits.toString())
+                                return true
+                            }
                         }
+                        isHorizontalSwipe = false
                         return true
                     }
                 }
@@ -622,6 +685,10 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
 
         body.addView(rightCol)
         mainLayout.addView(body)
+
+        calcKeypadPanel = buildCalculatorKeypad()
+        calcKeypadPanel.visibility = View.GONE
+        mainLayout.addView(calcKeypadPanel)
 
         emojiMediaPanel = co.com.onecontrol.mykeyboard.ui.emoji.EmojiMediaPanelView(context).apply {
             visibility = View.GONE
@@ -903,6 +970,13 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
                 row.layoutParams = lp
             }
         }
+        calcKeypadRows.forEach { row ->
+            val lp = row.layoutParams as? LinearLayout.LayoutParams
+            if (lp != null && lp.height != heightPx) {
+                lp.height = heightPx
+                row.layoutParams = lp
+            }
+        }
         val targetPanelScrollHeight = (heightPx * 4 - dpToPx(36f)).coerceAtLeast(dpToPx(160f))
         emojiMediaPanel.setPanelContentHeight(targetPanelScrollHeight)
 
@@ -1004,6 +1078,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
 
     fun updateState(mode: InputMode, caseMode: CaseMode) {
         currentInputMode = mode
+        currentCaseMode = caseMode
         statusBadge.text = "${mode.label} · ${caseMode.label}"
 
         val isEnglish = (mode == InputMode.T9_EN)
@@ -1296,6 +1371,336 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
         suggestionScroll.scrollTo(0, 0)
     }
 
+    // --- Long-Press Options Popup & Strip ---
+
+    private fun showKeyOptions(digit: Char, anchorView: View) {
+        val isUpper = currentCaseMode == CaseMode.UPPER
+        val options = T9KeyMap.getLongPressOptions(digit, isUpper)
+        if (options.isEmpty()) return
+
+        // 1. Show in Top Suggestion Bar
+        prepareStripWithCloseChip()
+        val title = TextView(context).apply {
+            text = "$digit:"
+            setTextColor(ContextCompat.getColor(context, R.color.kb_accent))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dpToPx(4f), 0, dpToPx(4f), 0)
+        }
+        suggestionContainer.addView(title, marginEndParams(4))
+
+        options.forEachIndexed { index, opt ->
+            val isPrimary = index == 0
+            val chip = createSuggestionChip(opt, primary = isPrimary) {
+                performHaptic()
+                listener?.onDirectCommit(opt)
+                dismissActivePopup()
+                utilityControlsLayout.visibility = View.VISIBLE
+                langPill.visibility = View.VISIBLE
+                showSuggestions(emptyList(), false, "")
+            }
+            suggestionContainer.addView(chip, marginEndParams(5))
+        }
+        suggestionScroll.scrollTo(0, 0)
+
+        // 2. Also show floating popup directly above the key
+        dismissActivePopup()
+        if (anchorView.isAttachedToWindow && anchorView.windowToken != null) {
+            val popupContent = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(dpToPx(6f), dpToPx(4f), dpToPx(6f), dpToPx(4f))
+                background = GradientDrawable().apply {
+                    setColor(ContextCompat.getColor(context, R.color.kb_action_bg))
+                    cornerRadius = dpToPx(10f).toFloat()
+                    setStroke(dpToPx(1f), ContextCompat.getColor(context, R.color.kb_accent_soft))
+                }
+            }
+
+            options.take(7).forEachIndexed { idx, opt ->
+                val tv = TextView(context).apply {
+                    text = opt
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
+                    typeface = if (idx == 0) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+                    setTextColor(
+                        if (idx == 0) ContextCompat.getColor(context, R.color.kb_accent)
+                        else ContextCompat.getColor(context, R.color.kb_text_primary)
+                    )
+                    gravity = Gravity.CENTER
+                    setPadding(dpToPx(9f), dpToPx(6f), dpToPx(9f), dpToPx(6f))
+                    isClickable = true
+                    setOnClickListener {
+                        performHaptic()
+                        listener?.onDirectCommit(opt)
+                        dismissActivePopup()
+                        utilityControlsLayout.visibility = View.VISIBLE
+                        langPill.visibility = View.VISIBLE
+                        showSuggestions(emptyList(), false, "")
+                    }
+                }
+                popupContent.addView(tv)
+            }
+
+            try {
+                val popup = android.widget.PopupWindow(
+                    popupContent,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    true
+                ).apply {
+                    isOutsideTouchable = true
+                    elevation = dpToPx(10f).toFloat()
+                }
+                popup.showAsDropDown(anchorView, 0, -anchorView.height - dpToPx(46f))
+                activePopup = popup
+            } catch (_: Exception) {}
+        }
+    }
+
+    private fun dismissActivePopup() {
+        activePopup?.let {
+            if (it.isShowing) {
+                try {
+                    it.dismiss()
+                } catch (_: Exception) {}
+            }
+        }
+        activePopup = null
+    }
+
+    // --- Calculator Mode ---
+
+    private fun toggleCalculatorMode() {
+        isCalculatorActive = !isCalculatorActive
+        dismissActivePopup()
+
+        if (isCalculatorActive) {
+            calcButton.setTextColor(ContextCompat.getColor(context, R.color.kb_accent))
+            calcButton.background = GradientDrawable().apply {
+                setColor(ContextCompat.getColor(context, R.color.kb_accent_soft))
+                cornerRadius = dpToPx(10f).toFloat()
+            }
+            body.visibility = View.GONE
+            calcKeypadPanel.visibility = View.VISIBLE
+            calcExpression = ""
+            calcCurrentResult = ""
+            updateCalcDisplay()
+        } else {
+            calcButton.setTextColor(ContextCompat.getColor(context, R.color.kb_text_primary))
+            calcButton.background = GradientDrawable().apply {
+                setColor(ContextCompat.getColor(context, R.color.kb_surface))
+                cornerRadius = dpToPx(10f).toFloat()
+            }
+            calcKeypadPanel.visibility = View.GONE
+            body.visibility = View.VISIBLE
+            utilityControlsLayout.visibility = View.VISIBLE
+            langPill.visibility = View.VISIBLE
+            showSuggestions(emptyList(), false, "")
+        }
+    }
+
+    private fun buildCalculatorKeypad(): LinearLayout {
+        val calcLayout = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
+
+        val rows = listOf(
+            listOf("7", "8", "9", "÷"),
+            listOf("4", "5", "6", "×"),
+            listOf("1", "2", "3", "-"),
+            listOf("C", "0", ".", "+")
+        )
+
+        rows.forEach { rowKeys ->
+            val row = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    dpToPx(keyHeightDp.toFloat())
+                ).apply {
+                    bottomMargin = dpToPx(5f)
+                }
+            }
+            rowKeys.forEachIndexed { idx, keyLabel ->
+                val isOp = keyLabel in listOf("÷", "×", "-", "+")
+                val isClear = keyLabel == "C"
+                val btn = createActionKey(keyLabel, accent = isOp).apply {
+                    if (isClear) {
+                        setTextColor(Color.parseColor("#FF5252"))
+                    }
+                    setOnClickListener {
+                        performHaptic()
+                        handleCalcInput(keyLabel)
+                    }
+                }
+                row.addView(btn, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
+                    if (idx < rowKeys.size - 1) marginEnd = dpToPx(5f)
+                })
+            }
+            calcKeypadRows.add(row)
+            calcLayout.addView(row)
+        }
+
+        // Bottom action row for calculator: Volver (ABC), Backspace, Equals
+        val bottomRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dpToPx(keyHeightDp.toFloat())
+            )
+        }
+
+        val btnExitCalc = createActionKey("Volver (ABC)").apply {
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            setOnClickListener {
+                performHaptic()
+                toggleCalculatorMode()
+            }
+        }
+        val btnBackspace = createActionKey("⌫").apply {
+            setOnClickListener {
+                performHaptic()
+                onCalcBackspace()
+            }
+        }
+        val btnEquals = createActionKey("=", accent = true).apply {
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
+            setOnClickListener {
+                performHaptic()
+                onCalcEquals()
+            }
+        }
+
+        bottomRow.addView(btnExitCalc, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1.4f).apply {
+            marginEnd = dpToPx(5f)
+        })
+        bottomRow.addView(btnBackspace, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
+            marginEnd = dpToPx(5f)
+        })
+        bottomRow.addView(btnEquals, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1.4f))
+
+        calcKeypadRows.add(bottomRow)
+        calcLayout.addView(bottomRow)
+
+        return calcLayout
+    }
+
+    private fun handleCalcInput(input: String) {
+        when (input) {
+            "C" -> {
+                calcExpression = ""
+                calcCurrentResult = ""
+            }
+            "÷", "×", "-", "+" -> {
+                if (calcExpression.isNotEmpty()) {
+                    val last = calcExpression.last()
+                    if (last in listOf('÷', '×', '-', '+', ' ')) {
+                        calcExpression = calcExpression.trimEnd().dropLast(1)
+                    }
+                    calcExpression = "$calcExpression $input "
+                }
+            }
+            "." -> {
+                if (calcExpression.isEmpty() || calcExpression.endsWith(" ")) {
+                    calcExpression += "0."
+                } else if (!calcExpression.takeLastWhile { it != ' ' }.contains('.')) {
+                    calcExpression += "."
+                }
+            }
+            else -> {
+                calcExpression += input
+            }
+        }
+
+        val eval = co.com.onecontrol.mykeyboard.engine.MathEvaluator.evaluateSimpleExpression(calcExpression)
+        if (eval != null) {
+            calcCurrentResult = if (eval == eval.toLong().toDouble()) {
+                eval.toLong().toString()
+            } else {
+                String.format(java.util.Locale.US, "%.4f", eval).trimEnd('0').trimEnd('.')
+            }
+        }
+        updateCalcDisplay()
+    }
+
+    private fun onCalcBackspace() {
+        if (calcExpression.isNotEmpty()) {
+            calcExpression = if (calcExpression.endsWith(" ")) {
+                calcExpression.dropLast(3)
+            } else {
+                calcExpression.dropLast(1)
+            }
+            val eval = co.com.onecontrol.mykeyboard.engine.MathEvaluator.evaluateSimpleExpression(calcExpression)
+            calcCurrentResult = if (eval != null) {
+                if (eval == eval.toLong().toDouble()) {
+                    eval.toLong().toString()
+                } else {
+                    String.format(java.util.Locale.US, "%.4f", eval).trimEnd('0').trimEnd('.')
+                }
+            } else {
+                ""
+            }
+            updateCalcDisplay()
+        }
+    }
+
+    private fun onCalcEquals() {
+        val eval = co.com.onecontrol.mykeyboard.engine.MathEvaluator.evaluateSimpleExpression(calcExpression)
+        if (eval != null) {
+            val formatted = if (eval == eval.toLong().toDouble()) {
+                eval.toLong().toString()
+            } else {
+                String.format(java.util.Locale.US, "%.4f", eval).trimEnd('0').trimEnd('.')
+            }
+            calcExpression = formatted
+            calcCurrentResult = formatted
+            updateCalcDisplay()
+        }
+    }
+
+    private fun updateCalcDisplay() {
+        suggestionContainer.removeAllViews()
+        utilityControlsLayout.visibility = View.GONE
+        expandButton.visibility = View.GONE
+        langPill.visibility = View.GONE
+
+        val exprText = if (calcExpression.isEmpty()) "0" else calcExpression
+        val resText = if (calcCurrentResult.isNotEmpty() && calcCurrentResult != calcExpression) {
+            " = $calcCurrentResult"
+        } else {
+            ""
+        }
+        val displayTv = TextView(context).apply {
+            text = "$exprText$resText"
+            setTextColor(ContextCompat.getColor(context, R.color.kb_text_primary))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dpToPx(8f), 0, dpToPx(8f), 0)
+        }
+        suggestionContainer.addView(displayTv, marginEndParams(8))
+
+        val toPaste = if (calcCurrentResult.isNotEmpty()) calcCurrentResult else calcExpression
+        if (toPaste.isNotEmpty()) {
+            val pasteChip = createSuggestionChip("↵ Pegar: $toPaste", primary = true) {
+                performStrongHaptic()
+                listener?.onDirectCommit(toPaste)
+            }
+            suggestionContainer.addView(pasteChip, marginEndParams(6))
+        }
+
+        val exitChip = createSuggestionChip("✕ Cerrar", primary = false) {
+            performHaptic()
+            toggleCalculatorMode()
+        }
+        suggestionContainer.addView(exitChip)
+        suggestionScroll.scrollTo(0, 0)
+    }
+
     private fun performHaptic() {
         if (hapticStrength <= 0) return
         val constant = if (hapticStrength >= 65) {
@@ -1350,6 +1755,43 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
             }
             addView(mainTv)
             addView(subTv)
+
+            var downX = 0f
+            var downY = 0f
+            var isFlickedUp = false
+
+            setOnTouchListener { v, event ->
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        downX = event.x
+                        downY = event.y
+                        isFlickedUp = false
+                        false
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        val dy = event.y - downY
+                        val dx = event.x - downX
+                        if (!isFlickedUp && dy < -dpToPx(24f) && abs(dy) > abs(dx) * 1.3f) {
+                            isFlickedUp = true
+                            performStrongHaptic()
+                            listener?.onDirectCommit(mainLabel)
+                            v.isPressed = false
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        if (isFlickedUp) {
+                            v.isPressed = false
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    else -> false
+                }
+            }
 
             if (onClick != null) {
                 setOnClickListener { onClick() }
@@ -1456,6 +1898,12 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
         LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
             marginEnd = dpToPx(dp.toFloat())
         }
+
+    override fun onDetachedFromWindow() {
+        super.onDetachedFromWindow()
+        activePopup?.dismiss()
+        activePopup = null
+    }
 
     private fun dpToPx(dp: Float): Int =
         TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, dp, resources.displayMetrics).roundToInt()

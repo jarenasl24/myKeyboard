@@ -91,4 +91,27 @@ object T9KeyMap {
         }
         return sb.toString()
     }
+
+    fun getLongPressOptions(digit: Char, isUpper: Boolean = false): List<String> {
+        val base = when (digit) {
+            '1' -> listOf("1", ".", ",", "?", "!", "¿", "¡", "@", "-", "_", "/", ":", "'", "\"", "(", ")")
+            '2' -> listOf("2", "a", "b", "c", "á", "à", "ä")
+            '3' -> listOf("3", "d", "e", "f", "é", "è", "ë")
+            '4' -> listOf("4", "g", "h", "i", "í", "ì", "ï")
+            '5' -> listOf("5", "j", "k", "l")
+            '6' -> listOf("6", "m", "n", "o", "ñ", "ó", "ò", "ö")
+            '7' -> listOf("7", "p", "q", "r", "s")
+            '8' -> listOf("8", "t", "u", "v", "ú", "ù", "ü")
+            '9' -> listOf("9", "w", "x", "y", "z")
+            '0' -> listOf("0", "+", " ", "\n", "~")
+            '*' -> listOf("*", "#", "(", ")", "[", "]", "{", "}", "%", "^")
+            '#' -> listOf("#", "$", "%", "&", "=", "<", ">", "\\", "|", "€")
+            else -> listOf(digit.toString())
+        }
+        return if (isUpper) {
+            base.map { if (it.length == 1 && it[0].isLetter()) it.uppercase() else it }
+        } else {
+            base
+        }
+    }
 }

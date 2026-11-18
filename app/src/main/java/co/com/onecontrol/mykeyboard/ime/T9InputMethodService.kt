@@ -479,7 +479,16 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
         for (ch in digits) {
             t9Engine.appendDigit(ch)
         }
-        refreshT9Suggestions()
+        val topWord = t9Engine.getPrimarySuggestion(inputMode.toLanguage(), caseMode)
+        if (topWord != null) {
+            ic.commitText("$topWord ", 1)
+            t9Engine.learnWord(inputMode.toLanguage(), topWord)
+            t9Engine.clear()
+            applyAutoCapIfSentenceEnd(ic)
+            refreshT9Suggestions()
+        } else {
+            refreshT9Suggestions()
+        }
     }
 
     override fun onCalculatorSelected(expression: String, result: String) {
@@ -571,13 +580,32 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
     }
 
     override fun onSwitchImeRequested() {
-        val imm = getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager
-        imm?.showInputMethodPicker()
+        val switched = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+            try {
+                switchToNextInputMethod(false)
+            } catch (_: Exception) {
+                false
+            }
+        } else {
+            false
+        }
+        if (!switched) {
+            val imm = getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager
+            imm?.showInputMethodPicker()
+        }
     }
 
     override fun onShowImePickerRequested() {
         val imm = getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager
         imm?.showInputMethodPicker()
+    }
+
+    override fun onDirectCommit(text: String) {
+        val ic = currentInputConnection ?: return
+        commitAllComposing()
+        ic.commitText(text, 1)
+        applyAutoCapIfSentenceEnd(ic)
+        refreshT9Suggestions()
     }
 
     override fun onGifSelected(assetName: String, label: String) {
