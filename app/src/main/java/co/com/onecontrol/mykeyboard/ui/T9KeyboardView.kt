@@ -752,6 +752,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
         var isLongPressActive = false
         val longPressRunnable = Runnable {
             isLongPressActive = true
+            keyView.parent?.requestDisallowInterceptTouchEvent(true)
             performHaptic()
             val options = getSlideOptionsForKey(digit, currentCaseMode)
             val rowMargin = when (digit) {
@@ -768,7 +769,9 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
                 MotionEvent.ACTION_DOWN -> {
                     isLongPressActive = false
                     v.isPressed = true
-                    v.parent?.requestDisallowInterceptTouchEvent(true)
+                    if (digit == '#') {
+                        v.parent?.requestDisallowInterceptTouchEvent(true)
+                    }
                     repeatHandler.removeCallbacks(longPressRunnable)
                     repeatHandler.postDelayed(longPressRunnable, 250L)
                     true
@@ -1194,7 +1197,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
                 }
                 suggestionContainer.addView(chip, marginEndParams(6))
             }
-            if (hasPendingDigits) {
+            if (hasPendingDigits && currentInputMode != InputMode.MULTI_TAP) {
                 val spellChip = createSuggestionChip("🔤 ABC", primary = false) {
                     performHaptic()
                     hideCandidateGrid()

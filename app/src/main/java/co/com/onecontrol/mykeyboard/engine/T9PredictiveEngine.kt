@@ -18,6 +18,15 @@ class T9PredictiveEngine(
         return true
     }
 
+    fun setDigits(digits: String) {
+        digitBuffer.clear()
+        for (ch in digits) {
+            if (ch in '2'..'9') {
+                digitBuffer.append(ch)
+            }
+        }
+    }
+
     fun backspaceDigit(): Boolean {
         if (digitBuffer.isEmpty()) return false
         digitBuffer.deleteCharAt(digitBuffer.length - 1)
@@ -28,22 +37,49 @@ class T9PredictiveEngine(
         digitBuffer.clear()
     }
 
-    fun getSuggestions(language: T9DictionaryTrie.Language, caseMode: CaseMode): List<String> {
+    fun getSuggestions(
+        language: T9DictionaryTrie.Language,
+        caseMode: CaseMode,
+        prevWord2: String? = null,
+        prevWord1: String? = null
+    ): List<String> {
         if (digitBuffer.isEmpty()) return emptyList()
-        val primary = dictionary.query(language, digitBuffer.toString(), limit = 8)
+        val digits = digitBuffer.toString()
+        val primary = dictionary.query(
+            language = language,
+            digitSequence = digits,
+            limit = 8,
+            prevWord2 = prevWord2,
+            prevWord1 = prevWord1
+        )
         if (language == T9DictionaryTrie.Language.ES && primary.size < 4) {
-            val fallbackEn = dictionary.query(T9DictionaryTrie.Language.EN, digitBuffer.toString(), limit = 4)
+            val fallbackEn = dictionary.query(
+                language = T9DictionaryTrie.Language.EN,
+                digitSequence = digits,
+                limit = 4,
+                prevWord2 = prevWord2,
+                prevWord1 = prevWord1
+            )
             val combined = (primary + fallbackEn).distinct().take(8)
             return combined.map { caseMode.applyToWord(it) }
         }
         return primary.map { caseMode.applyToWord(it) }
     }
 
-    fun getPrimarySuggestion(language: T9DictionaryTrie.Language, caseMode: CaseMode): String? {
-        return getSuggestions(language, caseMode).firstOrNull()
+    fun getPrimarySuggestion(
+        language: T9DictionaryTrie.Language,
+        caseMode: CaseMode,
+        prevWord2: String? = null,
+        prevWord1: String? = null
+    ): String? {
+        return getSuggestions(language, caseMode, prevWord2, prevWord1).firstOrNull()
     }
 
-    fun learnWord(language: T9DictionaryTrie.Language, word: String) {
-        dictionary.learnWord(language, word)
+    fun learnWord(language: T9DictionaryTrie.Language, word: String, explicit: Boolean = false) {
+        dictionary.learnWord(language, word, explicit)
+    }
+
+    fun penalizeWord(language: T9DictionaryTrie.Language, word: String) {
+        dictionary.penalizeWord(language, word)
     }
 }

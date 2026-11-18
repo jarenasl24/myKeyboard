@@ -44,7 +44,15 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
     private var caseMode = CaseMode.CAPITALIZE
     private var lastT9LanguageMode = InputMode.T9_ES
     private var returnToT9AfterWord: InputMode? = null
-    private var lastCommittedWord: String? = null
+
+    // Contextual N-gram state (prevWord1 = two words ago, prevWord2 = immediately preceding word)
+    private var prevContextWord1: String? = null
+    private var prevContextWord2: String? = null
+
+    // Undo / Negative Feedback tracking when Space auto-commits a T9 primary suggestion
+    private var lastAutoCommittedWord: String? = null
+    private var lastAutoCommittedDigits: String? = null
+
     private val multiTapWordBuffer = StringBuilder()
 
     override fun onCreate() {
@@ -54,7 +62,7 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
         dictionary = T9DictionaryTrie(applicationContext)
         dictionary.loadAsync {
             shortcutStore.getAllShortcuts().forEach { sc ->
-                dictionary.learnWord(T9DictionaryTrie.Language.ES, sc.shortcut)
+                dictionary.learnWord(T9DictionaryTrie.Language.ES, sc.shortcut, explicit = true)
             }
             refreshT9Suggestions()
         }
@@ -62,10 +70,11 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
         multiTapEngine = MultiTapEngine(
             onComposingChanged = { text ->
                 currentInputConnection?.setComposingText(text, 1)
+                refreshMultiTapSuggestions(pendingChar = text.toString())
             },
             onCommitChar = { ch ->
                 currentInputConnection?.commitText(ch, 1)
-                if (ch.length == 1 && ch[0].isLetter()) {
+                if (ch.length == 1 && (ch[0].isLetter() || ch[0] == 'ñ' || ch[0] == 'Ñ')) {
                     multiTapWordBuffer.append(ch[0])
                 } else {
                     flushMultiTapWordToDictionary()
@@ -74,6 +83,7 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
                     caseMode = CaseMode.LOWER
                     keyboardView?.updateState(inputMode, caseMode)
                 }
+                refreshMultiTapSuggestions(pendingChar = "")
             }
         )
 
@@ -120,7 +130,9 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
         multiTapEngine.reset()
         multiTapWordBuffer.clear()
         returnToT9AfterWord = null
-        lastCommittedWord = null
+        prevContextWord1 = null
+        prevContextWord2 = null
+        clearAutoCommitUndoState()
         keyboardView?.hideEmojiPanel()
 
         val inputType = info?.inputType ?: 0
@@ -156,6 +168,8 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
         keyboardView?.updateImeAction(info?.imeOptions ?: EditorInfo.IME_ACTION_NONE)
         keyboardView?.updateState(inputMode, caseMode)
 
+        syncContextWordsFromEditor()
+
         when {
             isEmailField -> keyboardView?.showEmailDomainStrip()
             isPasswordField -> keyboardView?.showPasswordHelpStrip()
@@ -183,9 +197,14 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
             if (!isAtComposingEnd) {
                 currentInputConnection?.finishComposingText()
                 if (!t9Engine.isEmpty()) {
-                    val primary = t9Engine.getPrimarySuggestion(inputMode.toLanguage(), caseMode)
+                    val primary = t9Engine.getPrimarySuggestion(
+                        inputMode.toLanguage(),
+                        caseMode,
+                        prevContextWord2,
+                        prevContextWord1
+                    )
                     if (primary != null) {
-                        t9Engine.learnWord(inputMode.toLanguage(), primary)
+                        t9Engine.learnWord(inputMode.toLanguage(), primary, explicit = false)
                     }
                     t9Engine.clear()
                 }
@@ -193,6 +212,7 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
                     multiTapEngine.reset()
                 }
                 multiTapWordBuffer.clear()
+                syncContextWordsFromEditor()
                 keyboardView?.showSuggestions(emptyList(), false, "")
             }
         }
@@ -218,6 +238,7 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
 
     override fun onDigitKey(digit: Char) {
         val ic = currentInputConnection ?: return
+        clearAutoCommitUndoState()
         when (inputMode) {
             InputMode.NUMERIC -> {
                 ic.commitText(digit.toString(), 1)
@@ -227,11 +248,14 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
             }
             InputMode.T9_ES, InputMode.T9_EN -> {
                 if (digit == '1') {
-                    commitT9Composing(ic, learn = true)
+                    commitT9Composing(ic, learn = true, explicit = false)
                     multiTapEngine.onKeyTap('1', caseMode)
                 } else {
                     if (multiTapEngine.hasPending()) {
                         multiTapEngine.commitPending()
+                    }
+                    if (t9Engine.isEmpty()) {
+                        syncContextWordsFromEditor()
                     }
                     t9Engine.appendDigit(digit)
                     refreshT9Suggestions()
@@ -241,6 +265,7 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
     }
 
     override fun onStarKey() {
+        clearAutoCommitUndoState()
         if (inputMode == InputMode.NUMERIC) {
             currentInputConnection?.commitText("*", 1)
             return
@@ -253,6 +278,7 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
     }
 
     override fun onStarLongPress() {
+        clearAutoCommitUndoState()
         if (inputMode == InputMode.NUMERIC) {
             currentInputConnection?.commitText("*", 1)
             return
@@ -263,11 +289,17 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
     override fun onZeroKey() {
         val ic = currentInputConnection ?: return
         when (inputMode) {
-            InputMode.NUMERIC -> ic.commitText("0", 1)
+            InputMode.NUMERIC -> {
+                clearAutoCommitUndoState()
+                ic.commitText("0", 1)
+            }
             InputMode.MULTI_TAP -> {
+                clearAutoCommitUndoState()
                 multiTapEngine.commitPending()
                 flushMultiTapWordToDictionary()
+                learnCompletedWordBeforeCursor(ic, explicit = true)
                 ic.commitText(" ", 1)
+                syncContextWordsFromEditor()
                 if (returnToT9AfterWord != null) {
                     val target = returnToT9AfterWord!!
                     returnToT9AfterWord = null
@@ -277,11 +309,25 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
             }
             InputMode.T9_ES, InputMode.T9_EN -> {
                 if (!t9Engine.isEmpty()) {
-                    commitT9Composing(ic, learn = true)
-                } else if (multiTapEngine.hasPending()) {
-                    multiTapEngine.commitPending()
+                    val pendingDigits = t9Engine.currentDigits
+                    val committedWord = commitT9Composing(ic, learn = true, explicit = false)
+                    ic.commitText(" ", 1)
+                    if (committedWord != null && pendingDigits.isNotEmpty()) {
+                        lastAutoCommittedWord = committedWord
+                        lastAutoCommittedDigits = pendingDigits
+                    } else {
+                        clearAutoCommitUndoState()
+                    }
+                } else {
+                    clearAutoCommitUndoState()
+                    if (multiTapEngine.hasPending()) {
+                        multiTapEngine.commitPending()
+                    }
+                    // If the user spelled a custom word via Hold & Slide or manual edits, learn it on Space!
+                    learnCompletedWordBeforeCursor(ic, explicit = true)
+                    ic.commitText(" ", 1)
+                    syncContextWordsFromEditor()
                 }
-                ic.commitText(" ", 1)
                 applyAutoCapIfSentenceEnd(ic)
                 refreshT9Suggestions()
             }
@@ -289,11 +335,13 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
     }
 
     override fun onZeroLongPress() {
+        clearAutoCommitUndoState()
         commitAllComposing()
         currentInputConnection?.commitText("0", 1)
     }
 
     override fun onHashKey() {
+        clearAutoCommitUndoState()
         commitAllComposing()
         returnToT9AfterWord = null
         val next = inputMode.next()
@@ -301,6 +349,7 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
     }
 
     override fun onQuickLanguageToggle() {
+        clearAutoCommitUndoState()
         returnToT9AfterWord = null
         val next = when (inputMode) {
             InputMode.T9_ES -> InputMode.T9_EN
@@ -311,6 +360,7 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
     }
 
     override fun onTogglePredictiveMode() {
+        clearAutoCommitUndoState()
         commitAllComposing()
         returnToT9AfterWord = null
         val nextMode = when (inputMode) {
@@ -322,6 +372,7 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
     }
 
     override fun onModeSelected(mode: InputMode) {
+        clearAutoCommitUndoState()
         commitAllComposing()
         returnToT9AfterWord = null
         setInputMode(mode, persist = true)
@@ -329,7 +380,10 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
 
     override fun onBackspace() {
         val ic = currentInputConnection ?: return
+
+        // 1. If actively typing T9 digits, delete the last digit
         if ((inputMode == InputMode.T9_ES || inputMode == InputMode.T9_EN) && !t9Engine.isEmpty()) {
+            clearAutoCommitUndoState()
             t9Engine.backspaceDigit()
             if (t9Engine.isEmpty()) {
                 ic.setComposingText("", 1)
@@ -337,11 +391,37 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
             refreshT9Suggestions()
             return
         }
+
+        // 2. Smart Undo + Negative Feedback: if user just hit Space (auto-committing a T9 suggestion)
+        // and immediately presses Backspace, penalize the wrong auto-committed word and restore the T9 digits
+        // so they can pick the exact alternative suggestion they wanted!
+        val undoWord = lastAutoCommittedWord
+        val undoDigits = lastAutoCommittedDigits
+        if ((inputMode == InputMode.T9_ES || inputMode == InputMode.T9_EN) &&
+            undoWord != null && undoDigits != null
+        ) {
+            clearAutoCommitUndoState()
+            val expectedSuffix = "$undoWord "
+            val before = ic.getTextBeforeCursor(expectedSuffix.length + 4, 0)?.toString() ?: ""
+            if (before.endsWith(expectedSuffix)) {
+                val lang = inputMode.toLanguage()
+                t9Engine.penalizeWord(lang, undoWord)
+                ic.deleteSurroundingText(expectedSuffix.length, 0)
+                syncContextWordsFromEditor()
+                t9Engine.setDigits(undoDigits)
+                refreshT9Suggestions()
+                return
+            }
+        }
+
+        clearAutoCommitUndoState()
         if (multiTapEngine.cancelPending()) {
+            refreshMultiTapSuggestions(pendingChar = "")
             return
         }
         if (multiTapWordBuffer.isNotEmpty()) {
             multiTapWordBuffer.deleteCharAt(multiTapWordBuffer.length - 1)
+            refreshMultiTapSuggestions(pendingChar = "")
         }
         val selected = ic.getSelectedText(0)
         if (!selected.isNullOrEmpty()) {
@@ -349,12 +429,18 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
         } else {
             ic.deleteSurroundingText(1, 0)
         }
+        syncContextWordsFromEditor()
+        if (inputMode == InputMode.T9_ES || inputMode == InputMode.T9_EN) {
+            refreshT9Suggestions()
+        }
     }
 
     override fun onEnterKey() {
         val ic = currentInputConnection ?: return
+        clearAutoCommitUndoState()
         commitAllComposing()
         flushMultiTapWordToDictionary()
+        learnCompletedWordBeforeCursor(ic, explicit = true)
 
         val editorInfo = currentInputEditorInfo
         val imeOptions = editorInfo?.imeOptions ?: 0
@@ -371,19 +457,53 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
 
     override fun onSuggestionSelected(word: String) {
         val ic = currentInputConnection ?: return
-        if (lastCommittedWord != null) {
-            dictionary.recordWordPair(inputMode.toLanguage(), lastCommittedWord!!, word)
+        clearAutoCommitUndoState()
+        val lang = (returnToT9AfterWord ?: inputMode).toLanguage()
+
+        if (inputMode == InputMode.MULTI_TAP) {
+            multiTapEngine.cancelPending()
+            val bufLen = multiTapWordBuffer.length
+            if (bufLen > 0) {
+                ic.deleteSurroundingText(bufLen, 0)
+                multiTapWordBuffer.clear()
+            }
+            ic.commitText("$word ", 1)
+            t9Engine.learnWord(lang, word, explicit = true)
+            recordWordInContext(lang, word, explicit = true)
+            if (returnToT9AfterWord != null) {
+                val target = returnToT9AfterWord!!
+                returnToT9AfterWord = null
+                setInputMode(target, persist = false)
+            }
+            applyAutoCapIfSentenceEnd(ic)
+            refreshT9Suggestions()
+            return
         }
-        lastCommittedWord = word
+
+        // If user explicitly chose a non-primary suggestion while typing T9 digits,
+        // mildly penalize the rejected primary suggestion and strongly boost the chosen word!
+        if (!t9Engine.isEmpty()) {
+            val currentPrimary = t9Engine.getPrimarySuggestion(lang, caseMode, prevContextWord2, prevContextWord1)
+            if (currentPrimary != null && !currentPrimary.equals(word, ignoreCase = true)) {
+                t9Engine.penalizeWord(lang, currentPrimary)
+            }
+        }
+
         ic.commitText("$word ", 1)
-        t9Engine.learnWord(inputMode.toLanguage(), word)
+        t9Engine.learnWord(lang, word, explicit = true)
+        recordWordInContext(lang, word, explicit = true)
         t9Engine.clear()
+        if (caseMode == CaseMode.CAPITALIZE) {
+            caseMode = CaseMode.LOWER
+            keyboardView?.updateState(inputMode, caseMode)
+        }
         applyAutoCapIfSentenceEnd(ic)
         refreshT9Suggestions()
     }
 
     override fun onFallbackMultiTapRequested() {
         val ic = currentInputConnection ?: return
+        clearAutoCommitUndoState()
         // Clear numeric T9 composing so user can spell the unknown word in Multi-tap and auto-learn it
         t9Engine.clear()
         ic.setComposingText("", 1)
@@ -395,13 +515,43 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
 
     override fun onSymbolSelected(symbol: String) {
         val ic = currentInputConnection ?: return
+        clearAutoCommitUndoState()
+
+        val isSingleLetter = symbol.length == 1 && (symbol[0].isLetter() || symbol[0] == 'ñ' || symbol[0] == 'Ñ')
+        if (isSingleLetter) {
+            // If user uses Hold & Slide to pick a specific letter while in T9 mode,
+            // commit any pending T9 text without falsely boosting the wrong T9 word,
+            // and append the chosen letter seamlessly.
+            if (!t9Engine.isEmpty()) {
+                commitT9Composing(ic, learn = false, explicit = false)
+            }
+            if (multiTapEngine.hasPending()) {
+                multiTapEngine.commitPending()
+            }
+            ic.commitText(symbol, 1)
+            if (inputMode == InputMode.MULTI_TAP) {
+                multiTapWordBuffer.append(symbol[0])
+                refreshMultiTapSuggestions(pendingChar = "")
+            } else {
+                if (caseMode == CaseMode.CAPITALIZE) {
+                    caseMode = CaseMode.LOWER
+                    keyboardView?.updateState(inputMode, caseMode)
+                }
+                refreshT9Suggestions()
+            }
+            return
+        }
+
         commitAllComposing()
+        learnCompletedWordBeforeCursor(ic, explicit = true)
         ic.commitText(symbol, 1)
+        syncContextWordsFromEditor()
         refreshT9Suggestions()
     }
 
     override fun onSwipeDeleteWord() {
         val ic = currentInputConnection ?: return
+        clearAutoCommitUndoState()
         if (!t9Engine.isEmpty()) {
             t9Engine.clear()
             ic.setComposingText("", 1)
@@ -427,6 +577,8 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
         if (deleteCount > 0) {
             ic.deleteSurroundingText(deleteCount, 0)
         }
+        syncContextWordsFromEditor()
+        refreshT9Suggestions()
     }
 
     override fun onDeleteWord() {
@@ -435,16 +587,19 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
 
     override fun onMoveCursor(delta: Int) {
         val ic = currentInputConnection ?: return
+        clearAutoCommitUndoState()
         if (!t9Engine.isEmpty() || multiTapEngine.hasPending()) {
             ic.finishComposingText()
             if (!t9Engine.isEmpty()) {
-                val primary = t9Engine.getPrimarySuggestion(inputMode.toLanguage(), caseMode)
+                val primary = t9Engine.getPrimarySuggestion(
+                    inputMode.toLanguage(),
+                    caseMode,
+                    prevContextWord2,
+                    prevContextWord1
+                )
                 if (primary != null) {
-                    t9Engine.learnWord(inputMode.toLanguage(), primary)
-                    if (lastCommittedWord != null) {
-                        dictionary.recordWordPair(inputMode.toLanguage(), lastCommittedWord!!, primary)
-                    }
-                    lastCommittedWord = primary
+                    t9Engine.learnWord(inputMode.toLanguage(), primary, explicit = false)
+                    recordWordInContext(inputMode.toLanguage(), primary, explicit = false)
                 }
                 t9Engine.clear()
             }
@@ -472,6 +627,7 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
 
     override fun onSwipeType(digits: String) {
         val ic = currentInputConnection ?: return
+        clearAutoCommitUndoState()
         if (inputMode != InputMode.T9_ES && inputMode != InputMode.T9_EN) return
         if (digits.length < 2) return
 
@@ -481,8 +637,14 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
             val bestWord = caseMode.applyToWord(matches.first())
             val mappedMatches = matches.map { caseMode.applyToWord(it) }
             ic.commitText("$bestWord ", 1)
-            lastCommittedWord = bestWord
-            dictionary.learnWord(inputMode.toLanguage(), matches.first())
+            dictionary.learnWord(inputMode.toLanguage(), matches.first(), explicit = false)
+            recordWordInContext(inputMode.toLanguage(), bestWord, explicit = false)
+            lastAutoCommittedWord = bestWord
+            lastAutoCommittedDigits = T9KeyMap.wordToDigits(matches.first())
+            if (caseMode == CaseMode.CAPITALIZE) {
+                caseMode = CaseMode.LOWER
+                keyboardView?.updateState(inputMode, caseMode)
+            }
             applyAutoCapIfSentenceEnd(ic)
             keyboardView?.showSuggestions(
                 suggestions = mappedMatches,
@@ -490,7 +652,7 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
                 digits = ""
             )
         } else {
-            commitT9Composing(ic, learn = true)
+            commitT9Composing(ic, learn = true, explicit = false)
             t9Engine.clear()
             for (ch in digits) {
                 t9Engine.appendDigit(ch)
@@ -501,6 +663,7 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
 
     override fun onCalculatorSelected(expression: String, result: String) {
         val ic = currentInputConnection ?: return
+        clearAutoCommitUndoState()
         val before = ic.getTextBeforeCursor(expression.length + 4, 0)?.toString() ?: ""
         if (before.trimEnd().endsWith("=")) {
             ic.commitText(" $result ", 1)
@@ -534,6 +697,7 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
 
     override fun onShortcutSelected(expansion: String) {
         val ic = currentInputConnection ?: return
+        clearAutoCommitUndoState()
         if (inputMode == InputMode.MULTI_TAP) {
             val bufLen = multiTapWordBuffer.length
             if (bufLen > 0) {
@@ -543,6 +707,7 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
         }
         ic.commitText("$expansion ", 1)
         t9Engine.clear()
+        syncContextWordsFromEditor()
         applyAutoCapIfSentenceEnd(ic)
         refreshT9Suggestions()
     }
@@ -553,6 +718,7 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
 
     override fun onGeneratePasswordRequested() {
         val ic = currentInputConnection ?: return
+        clearAutoCommitUndoState()
         val upper = "ABCDEFGHJKLMNPQRSTUVWXYZ"
         val lower = "abcdefghijkmnopqrstuvwxyz"
         val digits = "23456789"
@@ -626,8 +792,10 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
 
     override fun onDirectCommit(text: String) {
         val ic = currentInputConnection ?: return
+        clearAutoCommitUndoState()
         commitAllComposing()
         ic.commitText(text, 1)
+        syncContextWordsFromEditor()
         applyAutoCapIfSentenceEnd(ic)
         refreshT9Suggestions()
     }
@@ -697,6 +865,96 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
 
     // --- Helpers ---
 
+    private fun clearAutoCommitUndoState() {
+        lastAutoCommittedWord = null
+        lastAutoCommittedDigits = null
+    }
+
+    private fun recordWordInContext(
+        lang: T9DictionaryTrie.Language,
+        newWord: String,
+        explicit: Boolean
+    ) {
+        val w = newWord.trim()
+        if (w.isEmpty()) return
+        val p2 = prevContextWord2
+        val p1 = prevContextWord1
+        if (!p2.isNullOrBlank()) {
+            dictionary.recordWordPair(
+                language = lang,
+                prevWord = p2,
+                nextWord = w,
+                prevWord1 = p1,
+                explicit = explicit
+            )
+        }
+        prevContextWord1 = p2
+        prevContextWord2 = w
+    }
+
+    private fun syncContextWordsFromEditor() {
+        val ic = currentInputConnection ?: return
+        val before = ic.getTextBeforeCursor(72, 0)?.toString() ?: return
+        val tokens = before.trim().split(Regex("\\s+")).filter { it.isNotBlank() }
+        prevContextWord2 = tokens.lastOrNull()
+        prevContextWord1 = if (tokens.size >= 2) tokens[tokens.size - 2] else null
+    }
+
+    /**
+     * Inspects the word immediately preceding the cursor (before a space or punctuation is committed).
+     * If the user typed a custom word via Hold & Slide, Multi-Tap, or manual editing, learns it with explicit priority!
+     */
+    private fun learnCompletedWordBeforeCursor(ic: InputConnection, explicit: Boolean) {
+        val before = ic.getTextBeforeCursor(48, 0)?.toString() ?: return
+        if (before.isEmpty() || before.last().isWhitespace()) return
+        val lastToken = before.trimEnd().split(Regex("\\s+")).lastOrNull() ?: return
+        val clean = lastToken.trim(',', '.', '!', '?', ';', ':', '¿', '¡', '"', '\'', '(', ')')
+        if (clean.length >= 2 && T9KeyMap.wordToDigits(clean) != null) {
+            val lang = (returnToT9AfterWord ?: lastT9LanguageMode).toLanguage()
+            t9Engine.learnWord(lang, clean, explicit = explicit)
+            val tokens = before.trimEnd().split(Regex("\\s+")).filter { it.isNotBlank() }
+            val p2 = if (tokens.size >= 2) tokens[tokens.size - 2] else null
+            val p1 = if (tokens.size >= 3) tokens[tokens.size - 3] else null
+            if (!p2.isNullOrBlank()) {
+                dictionary.recordWordPair(lang, p2, clean, p1, explicit = explicit)
+            }
+        }
+    }
+
+    private fun refreshMultiTapSuggestions(pendingChar: String) {
+        if (inputMode != InputMode.MULTI_TAP) return
+        val currentWord = buildString {
+            append(multiTapWordBuffer)
+            append(pendingChar)
+        }
+        if (currentWord.isEmpty()) {
+            keyboardView?.showSuggestions(emptyList(), false, "")
+            return
+        }
+        val matchingShortcuts = shortcutStore.findMatchesForWord(currentWord)
+        val digits = T9KeyMap.wordToDigits(currentWord)
+        val lang = (returnToT9AfterWord ?: lastT9LanguageMode).toLanguage()
+        val dictMatches = if (!digits.isNullOrEmpty()) {
+            dictionary.query(lang, digits, limit = 6, prevWord2 = prevContextWord2, prevWord1 = prevContextWord1)
+                .filter { it.startsWith(currentWord.lowercase()) && !it.equals(currentWord, ignoreCase = true) }
+                .map { caseMode.applyToWord(it) }
+        } else {
+            emptyList()
+        }
+        val suggestions = buildList {
+            add(currentWord)
+            addAll(dictMatches)
+        }.distinct().take(6)
+
+        keyboardView?.showSuggestions(
+            suggestions = suggestions,
+            hasPendingDigits = true,
+            digits = "",
+            calculatorResult = null,
+            shortcuts = matchingShortcuts
+        )
+    }
+
     private fun setInputMode(mode: InputMode, persist: Boolean) {
         inputMode = mode
         if (mode == InputMode.T9_ES || mode == InputMode.T9_EN) {
@@ -736,12 +994,16 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
         }
 
         if (t9Engine.isEmpty()) {
-            val lastWord = before.trimEnd().split(Regex("\\s+")).lastOrNull() ?: ""
+            val tokens = before.trimEnd().split(Regex("\\s+")).filter { it.isNotBlank() }
+            val lastWord = tokens.lastOrNull() ?: ""
+            val secondLastWord = if (tokens.size >= 2) tokens[tokens.size - 2] else null
             val nextWords = if (lastWord.isNotEmpty()) {
                 NextWordPredictor.predict(
                     language = inputMode.toLanguage().code,
                     prevWord = lastWord,
-                    userStore = dictionary.userStore
+                    userStore = dictionary.userStore,
+                    maxCount = 5,
+                    prevWord1 = secondLastWord
                 )
             } else {
                 emptyList()
@@ -758,7 +1020,12 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
         }
 
         val matchingShortcuts = shortcutStore.findMatchesForDigits(t9Engine.currentDigits)
-        val suggestions = t9Engine.getSuggestions(inputMode.toLanguage(), caseMode)
+        val suggestions = t9Engine.getSuggestions(
+            language = inputMode.toLanguage(),
+            caseMode = caseMode,
+            prevWord2 = prevContextWord2,
+            prevWord1 = prevContextWord1
+        )
         val fallbackText = caseMode.applyToWord(T9KeyMap.digitsToDefaultLetters(t9Engine.currentDigits))
         val preview = suggestions.firstOrNull() ?: fallbackText
         ic?.setComposingText(preview, 1)
@@ -771,30 +1038,38 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
         )
     }
 
-    private fun commitT9Composing(ic: InputConnection, learn: Boolean) {
-        if (t9Engine.isEmpty()) return
-        val primary = t9Engine.getPrimarySuggestion(inputMode.toLanguage(), caseMode)
+    private fun commitT9Composing(
+        ic: InputConnection,
+        learn: Boolean,
+        explicit: Boolean = false
+    ): String? {
+        if (t9Engine.isEmpty()) return null
+        val lang = inputMode.toLanguage()
+        val primary = t9Engine.getPrimarySuggestion(lang, caseMode, prevContextWord2, prevContextWord1)
         val fallbackText = caseMode.applyToWord(T9KeyMap.digitsToDefaultLetters(t9Engine.currentDigits))
         val toCommit = primary ?: fallbackText
         ic.commitText(toCommit, 1)
-        if (lastCommittedWord != null && primary != null) {
-            dictionary.recordWordPair(inputMode.toLanguage(), lastCommittedWord!!, primary)
-        }
-        lastCommittedWord = primary ?: toCommit
-        if (learn && primary != null) {
-            t9Engine.learnWord(inputMode.toLanguage(), primary)
+        if (primary != null) {
+            recordWordInContext(lang, primary, explicit = explicit)
+            if (learn) {
+                t9Engine.learnWord(lang, primary, explicit = explicit)
+            }
+        } else {
+            prevContextWord1 = prevContextWord2
+            prevContextWord2 = toCommit
         }
         t9Engine.clear()
         if (caseMode == CaseMode.CAPITALIZE) {
             caseMode = CaseMode.LOWER
             keyboardView?.updateState(inputMode, caseMode)
         }
+        return toCommit
     }
 
     private fun commitAllComposing() {
         val ic = currentInputConnection ?: return
         if (!t9Engine.isEmpty()) {
-            commitT9Composing(ic, learn = true)
+            commitT9Composing(ic, learn = true, explicit = false)
         }
         if (multiTapEngine.hasPending()) {
             multiTapEngine.commitPending()
@@ -805,7 +1080,9 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
     private fun flushMultiTapWordToDictionary() {
         if (multiTapWordBuffer.length >= 2) {
             val lang = (returnToT9AfterWord ?: lastT9LanguageMode).toLanguage()
-            t9Engine.learnWord(lang, multiTapWordBuffer.toString())
+            val newWord = multiTapWordBuffer.toString()
+            t9Engine.learnWord(lang, newWord, explicit = true)
+            recordWordInContext(lang, newWord, explicit = true)
         }
         multiTapWordBuffer.clear()
     }
