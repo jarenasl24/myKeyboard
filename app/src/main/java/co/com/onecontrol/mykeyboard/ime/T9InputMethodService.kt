@@ -625,13 +625,20 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
         }
     }
 
-    override fun onSwipeType(digits: String) {
+    override fun onSwipeType(digits: String, rawDigits: String) {
         val ic = currentInputConnection ?: return
         clearAutoCommitUndoState()
         if (inputMode != InputMode.T9_ES && inputMode != InputMode.T9_EN) return
-        if (digits.length < 2) return
+        if (digits.length < 2 && rawDigits.length < 2) return
 
-        val matches = dictionary.querySwipe(inputMode.toLanguage(), digits, limit = 8)
+        val matches = dictionary.querySwipe(
+            language = inputMode.toLanguage(),
+            traceDigits = digits,
+            rawTraceDigits = rawDigits,
+            limit = 8,
+            prevWord2 = prevContextWord2,
+            prevWord1 = prevContextWord1
+        )
         if (matches.isNotEmpty()) {
             commitAllComposing()
             val bestWord = caseMode.applyToWord(matches.first())

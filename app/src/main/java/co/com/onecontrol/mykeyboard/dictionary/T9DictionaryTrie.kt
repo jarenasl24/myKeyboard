@@ -55,6 +55,12 @@ class T9DictionaryTrie(private val context: Context) {
         put(Language.EN, TrieNode())
     }
 
+    // Collapsed-digit roots for Glide/Swipe typing (e.g. "chimba" 244622 -> "2462")
+    private val swipeRoots = ConcurrentHashMap<Language, TrieNode>().apply {
+        put(Language.ES, TrieNode())
+        put(Language.EN, TrieNode())
+    }
+
     val userStore = UserDictionaryStore(context.applicationContext)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -133,11 +139,13 @@ class T9DictionaryTrie(private val context: Context) {
             Language.entries.forEach { lang ->
                 val newRoot = TrieNode()
                 val newSkelRoot = TrieNode()
-                loadFromAssets(lang, newRoot, newSkelRoot)
-                loadFromSystemUserDictionary(lang, newRoot, newSkelRoot)
-                loadFromUserStore(lang, newRoot, newSkelRoot)
+                val newSwipeRoot = TrieNode()
+                loadFromAssets(lang, newRoot, newSkelRoot, newSwipeRoot)
+                loadFromSystemUserDictionary(lang, newRoot, newSkelRoot, newSwipeRoot)
+                loadFromUserStore(lang, newRoot, newSkelRoot, newSwipeRoot)
                 roots[lang] = newRoot
                 skeletonRoots[lang] = newSkelRoot
+                swipeRoots[lang] = newSwipeRoot
             }
             loaded = true
             withContext(Dispatchers.Main) {
@@ -146,7 +154,21 @@ class T9DictionaryTrie(private val context: Context) {
         }
     }
 
-    private fun loadFromAssets(language: Language, root: TrieNode, skeletonRoot: TrieNode) {
+    private fun collapseDigits(digits: String): String {
+        if (digits.length <= 1) return digits
+        return buildString(digits.length) {
+            for (ch in digits) {
+                if (isEmpty() || last() != ch) append(ch)
+            }
+        }
+    }
+
+    private fun loadFromAssets(
+        language: Language,
+        root: TrieNode,
+        skeletonRoot: TrieNode,
+        swipeRoot: TrieNode
+    ) {
         try {
             context.assets.open(language.assetFile).use { inputStream ->
                 BufferedReader(InputStreamReader(inputStream, Charsets.UTF_8)).useLines { lines ->
@@ -156,7 +178,11 @@ class T9DictionaryTrie(private val context: Context) {
                             val parts = line.split('\t', ' ')
                             val word = parts[0].trim().lowercase()
                             val freq = parts.getOrNull(1)?.toIntOrNull() ?: 100
-                            insertBaseIntoTrie(root, word, freq)
+                            val digits = T9KeyMap.wordToDigits(word) ?: return@forEach
+                            insertBaseAtDigits(root, digits, word, freq)
+                            if (word.length >= 2) {
+                                insertBaseAtDigits(swipeRoot, collapseDigits(digits), word, freq)
+                            }
 
                             // Index vowel-skipped / consonant skeletons
                             val skeletons = extractSkeletons(word, language)
@@ -181,7 +207,12 @@ class T9DictionaryTrie(private val context: Context) {
         }
     }
 
-    private fun loadFromSystemUserDictionary(language: Language, root: TrieNode, skeletonRoot: TrieNode) {
+    private fun loadFromSystemUserDictionary(
+        language: Language,
+        root: TrieNode,
+        skeletonRoot: TrieNode,
+        swipeRoot: TrieNode
+    ) {
         try {
             val resolver = context.contentResolver ?: return
             val cursor = resolver.query(
@@ -198,14 +229,26 @@ class T9DictionaryTrie(private val context: Context) {
                     val locale = it.getString(2)?.lowercase() ?: ""
                     if (locale.isEmpty() || locale.startsWith(language.code)) {
                         val digits = T9KeyMap.wordToDigits(rawWord) ?: continue
+                        val uFreq = 6000 + sysFreq * 4
+                        val now = System.currentTimeMillis()
                         applyUserWordAtDigits(
                             root = root,
                             digits = digits,
                             word = rawWord,
-                            userFrequency = 6000 + sysFreq * 4,
-                            lastUsedMs = System.currentTimeMillis(),
+                            userFrequency = uFreq,
+                            lastUsedMs = now,
                             penalty = 0
                         )
+                        if (rawWord.length >= 2) {
+                            applyUserWordAtDigits(
+                                root = swipeRoot,
+                                digits = collapseDigits(digits),
+                                word = rawWord,
+                                userFrequency = uFreq,
+                                lastUsedMs = now,
+                                penalty = 0
+                            )
+                        }
                         for (skel in extractSkeletons(rawWord, language)) {
                             val skelDigits = T9KeyMap.wordToDigits(skel) ?: continue
                             applyUserWordAtDigits(
@@ -213,7 +256,7 @@ class T9DictionaryTrie(private val context: Context) {
                                 digits = skelDigits,
                                 word = rawWord,
                                 userFrequency = 5000 + sysFreq * 3,
-                                lastUsedMs = System.currentTimeMillis(),
+                                lastUsedMs = now,
                                 penalty = 0
                             )
                         }
@@ -225,7 +268,12 @@ class T9DictionaryTrie(private val context: Context) {
         }
     }
 
-    private fun loadFromUserStore(language: Language, root: TrieNode, skeletonRoot: TrieNode) {
+    private fun loadFromUserStore(
+        language: Language,
+        root: TrieNode,
+        skeletonRoot: TrieNode,
+        swipeRoot: TrieNode
+    ) {
         userStore.getAllWords(language.code).forEach { learned ->
             val digits = T9KeyMap.wordToDigits(learned.word) ?: return@forEach
             applyUserWordAtDigits(
@@ -236,6 +284,16 @@ class T9DictionaryTrie(private val context: Context) {
                 lastUsedMs = learned.lastUsedMs,
                 penalty = learned.penalty
             )
+            if (learned.word.length >= 2) {
+                applyUserWordAtDigits(
+                    root = swipeRoot,
+                    digits = collapseDigits(digits),
+                    word = learned.word,
+                    userFrequency = learned.frequency,
+                    lastUsedMs = learned.lastUsedMs,
+                    penalty = learned.penalty
+                )
+            }
             val skeletons = extractSkeletons(learned.word, language)
             for (skel in skeletons) {
                 val skelDigits = T9KeyMap.wordToDigits(skel) ?: continue
@@ -614,100 +672,128 @@ class T9DictionaryTrie(private val context: Context) {
         return candidates.map { it.first }.distinct().take(limit)
     }
 
-    fun querySwipe(language: Language, traceDigits: String, limit: Int = 8): List<String> {
-        if (traceDigits.length < 2) return emptyList()
-        val root = roots[language] ?: return emptyList()
-        val firstDigit = traceDigits.first()
-        val lastDigit = traceDigits.last()
-        val firstIdx = firstDigit - '2'
-        if (firstIdx !in 0..7) return emptyList()
-        val firstNode = root.children[firstIdx] ?: return emptyList()
-        val nowMs = System.currentTimeMillis()
+    fun querySwipe(
+        language: Language,
+        traceDigits: String,
+        rawTraceDigits: String = traceDigits,
+        limit: Int = 8,
+        prevWord2: String? = null,
+        prevWord1: String? = null
+    ): List<String> {
+        val anchorTrace = collapseDigits(traceDigits)
+        val rawCollapsed = collapseDigits(rawTraceDigits)
+        if (anchorTrace.length < 2 && rawCollapsed.length < 2) return emptyList()
 
-        // Collapse consecutive duplicate digits in trace (e.g. 22446622 -> 2462)
-        val compressedTrace = buildString {
-            for (ch in traceDigits) {
-                if (isEmpty() || last() != ch) append(ch)
+        val swipeRoot = swipeRoots[language] ?: return emptyList()
+        val nowMs = System.currentTimeMillis()
+        val contextBoosts = nextWordPredictor.getContextualBoostMap(language.code, prevWord2, prevWord1)
+
+        val candidates = LinkedHashSet<String>()
+
+        // 1. Exact match on intentional anchor trace (start + dwell/corner keys + end)
+        if (anchorTrace.length >= 2) {
+            val anchorMatches = queryNodeScored(
+                root = swipeRoot,
+                digitSequence = anchorTrace,
+                nowMs = nowMs,
+                contextBoosts = contextBoosts,
+                discount = 1.0
+            ).filter { it.first.length >= 2 }
+            for ((w, _) in anchorMatches) {
+                candidates.add(w)
+                if (candidates.size >= limit) return candidates.toList()
             }
         }
 
-        val results = mutableListOf<Pair<String, Int>>()
-        searchSwipeNode(
-            node = firstNode,
-            trace = compressedTrace,
-            traceIdx = 1,
-            lastDigit = lastDigit,
-            nowMs = nowMs,
-            results = results,
-            maxLimit = 180
-        )
-
-        // Also check skeleton roots for vowel-skipped swipe matches
-        skeletonRoots[language]?.children?.get(firstIdx)?.let { skelFirst ->
-            searchSwipeNode(
-                node = skelFirst,
-                trace = compressedTrace,
-                traceIdx = 1,
-                lastDigit = lastDigit,
+        // 2. If raw trace differs (e.g. straight-line 3-key word swiped very fast), check rawCollapsed
+        if (rawCollapsed.length >= 2 && rawCollapsed != anchorTrace) {
+            val rawMatches = queryNodeScored(
+                root = swipeRoot,
+                digitSequence = rawCollapsed,
                 nowMs = nowMs,
-                results = results,
-                maxLimit = 240
-            )
+                contextBoosts = contextBoosts,
+                discount = 0.88
+            ).filter { it.first.length >= 2 }
+            for ((w, _) in rawMatches) {
+                candidates.add(w)
+                if (candidates.size >= limit) return candidates.toList()
+            }
         }
 
-        results.sortByDescending { it.second }
-        return results.map { it.first }.distinct().take(limit)
-    }
-
-    private fun searchSwipeNode(
-        node: TrieNode,
-        trace: String,
-        traceIdx: Int,
-        lastDigit: Char,
-        nowMs: Long,
-        results: MutableList<Pair<String, Int>>,
-        maxLimit: Int
-    ) {
-        if (results.size >= maxLimit) return
-
-        // Only collect words when we have consumed at least 65% of the swiped trajectory
-        val traceCoverage = traceIdx.toDouble() / trace.length.toDouble()
-        if (traceCoverage >= 0.65) {
-            synchronized(node.words) {
-                for (w in node.words) {
-                    if (w.word.length >= 2) {
-                        val wDigits = T9KeyMap.wordToDigits(w.word)
-                        if (wDigits != null && wDigits.last() == lastDigit) {
-                            // Reward words that consume the entire swipe trace
-                            val coverageBonus = (traceCoverage * 10_000).toInt()
-                            val score = w.effectiveScore(nowMs) + coverageBonus
-                            results.add(w.word to score)
+        // 3. Transit key tolerance: drop 1 accidental intermediate transit key while keeping start & end fixed
+        val transitCandidates = mutableListOf<Pair<String, Int>>()
+        for (trace in listOf(anchorTrace, rawCollapsed).distinct()) {
+            if (trace.length >= 3) {
+                for (i in 1 until trace.length - 1) {
+                    val mutated = collapseDigits(trace.removeRange(i, i + 1))
+                    if (mutated.length >= 2 && mutated != anchorTrace && mutated != rawCollapsed) {
+                        val matches = queryNodeScored(
+                            root = swipeRoot,
+                            digitSequence = mutated,
+                            nowMs = nowMs,
+                            contextBoosts = contextBoosts,
+                            discount = 0.82
+                        )
+                        for (pair in matches) {
+                            if (pair.first.length >= 2 && pair.first !in candidates) {
+                                transitCandidates.add(pair)
+                            }
                         }
                     }
                 }
             }
         }
 
-        for (idx in 0..7) {
-            val child = node.children[idx] ?: continue
-            val childDigit = ('2' + idx)
-
-            var nextTraceIdx = -1
-            if (traceIdx > 0 && trace[traceIdx - 1] == childDigit) {
-                nextTraceIdx = traceIdx
-            } else {
-                for (ti in traceIdx until trace.length) {
-                    if (trace[ti] == childDigit) {
-                        nextTraceIdx = ti + 1
-                        break
+        // Also allow dropping 2 intermediate transit keys from rawCollapsed when a long diagonal crosses 2 cells
+        if (candidates.size + transitCandidates.size < 4 && rawCollapsed.length >= 5) {
+            for (i in 1 until rawCollapsed.length - 2) {
+                for (j in i + 1 until rawCollapsed.length - 1) {
+                    val sb = StringBuilder(rawCollapsed)
+                    sb.deleteCharAt(j)
+                    sb.deleteCharAt(i)
+                    val mutated = collapseDigits(sb.toString())
+                    if (mutated.length >= 2 && mutated != anchorTrace) {
+                        val matches = queryNodeScored(
+                            root = swipeRoot,
+                            digitSequence = mutated,
+                            nowMs = nowMs,
+                            contextBoosts = contextBoosts,
+                            discount = 0.72
+                        )
+                        for (pair in matches) {
+                            if (pair.first.length >= 2 && pair.first !in candidates) {
+                                transitCandidates.add(pair)
+                            }
+                        }
                     }
                 }
             }
+        }
 
-            if (nextTraceIdx != -1) {
-                searchSwipeNode(child, trace, nextTraceIdx, lastDigit, nowMs, results, maxLimit)
+        if (transitCandidates.isNotEmpty()) {
+            transitCandidates.sortByDescending { it.second }
+            for ((w, _) in transitCandidates) {
+                candidates.add(w)
+                if (candidates.size >= limit) return candidates.toList()
             }
         }
+
+        // 4. Prefix completions on anchorTrace if still few results
+        if (candidates.size < 4 && anchorTrace.length >= 2) {
+            val anchorNode = findNode(swipeRoot, anchorTrace)
+            if (anchorNode != null) {
+                val completions = collectSubtreeCompletions(
+                    startNode = anchorNode,
+                    limit = limit - candidates.size,
+                    excluded = candidates,
+                    nowMs = nowMs,
+                    contextBoosts = contextBoosts
+                )
+                candidates.addAll(completions)
+            }
+        }
+
+        return candidates.take(limit)
     }
 
     fun learnWord(language: Language, word: String, explicit: Boolean = false) {
@@ -718,6 +804,9 @@ class T9DictionaryTrie(private val context: Context) {
         val nowMs = System.currentTimeMillis()
 
         boostInMemoryAtDigits(root, digits, clean, explicit, nowMs)
+        swipeRoots[language]?.let { swipeRoot ->
+            boostInMemoryAtDigits(swipeRoot, collapseDigits(digits), clean, explicit, nowMs)
+        }
         skeletonRoots[language]?.let { skelRoot ->
             for (skel in extractSkeletons(clean, language)) {
                 val skelDigits = T9KeyMap.wordToDigits(skel) ?: continue
@@ -737,6 +826,9 @@ class T9DictionaryTrie(private val context: Context) {
         val nowMs = System.currentTimeMillis()
 
         penalizeInMemoryAtDigits(root, digits, clean, nowMs)
+        swipeRoots[language]?.let { swipeRoot ->
+            penalizeInMemoryAtDigits(swipeRoot, collapseDigits(digits), clean, nowMs)
+        }
         skeletonRoots[language]?.let { skelRoot ->
             for (skel in extractSkeletons(clean, language)) {
                 val skelDigits = T9KeyMap.wordToDigits(skel) ?: continue

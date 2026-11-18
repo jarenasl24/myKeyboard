@@ -59,7 +59,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
         fun onGifSelected(assetName: String, label: String)
         fun onTogglePredictiveMode()
         fun onModeSelected(mode: InputMode)
-        fun onSwipeType(digits: String)
+        fun onSwipeType(digits: String, rawDigits: String = digits)
         fun onCalculatorSelected(expression: String, result: String)
         fun onShortcutSelected(expansion: String)
         fun onShortcutsRequested()
@@ -452,16 +452,33 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
             private var startY = 0f
             private var isSwiping = false
             private var isHorizontalSwipe = false
-            private val swipeDigits = StringBuilder()
-            private var lastDigit: Char? = null
+            private val anchorDigits = StringBuilder()
+            private val rawSwipeDigits = StringBuilder()
+            private var lastConfirmedDigit: Char? = null
+            private var currentCandidateDigit: Char? = null
+            private var candidateEnterTimeMs = 0L
+            private var candidateConfirmed = false
 
-            private fun getDigitAt(x: Float, y: Float): Char? {
+            // Minimum milliseconds inside a key's core to count as an intentional stop along a straight path
+            private val dwellThresholdMs = 52L
+
+            private fun getDigitAt(x: Float, y: Float, strictCenter: Boolean = false): Char? {
                 val w = width.toFloat()
                 val h = height.toFloat()
                 if (w <= 0 || h <= 0) return null
                 if (x < 0f || x > w || y < 0f || y > h) return null
-                val col = (x / (w / 3f)).toInt().coerceIn(0, 2)
-                val row = (y / (h / 4f)).toInt().coerceIn(0, 3)
+                val cellW = w / 3f
+                val cellH = h / 4f
+                val col = (x / cellW).toInt().coerceIn(0, 2)
+                val row = (y / cellH).toInt().coerceIn(0, 3)
+                if (strictCenter) {
+                    val localX = (x - col * cellW) / cellW
+                    val localY = (y - row * cellH) / cellH
+                    // Ignore the outer 16% border/corners of keys during fast motion so diagonal glides don't clip neighbors
+                    if (localX !in 0.16f..0.84f || localY !in 0.16f..0.84f) {
+                        return null
+                    }
+                }
                 val grid = arrayOf(
                     charArrayOf('1', '2', '3'),
                     charArrayOf('4', '5', '6'),
@@ -470,6 +487,56 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
                 )
                 val ch = grid[row][col]
                 return if (ch in '1'..'9') ch else null
+            }
+
+            private fun shouldConfirmCornerTurn(prev: Char, mid: Char, next: Char, dwellMs: Long): Boolean {
+                if (prev !in '1'..'9' || mid !in '1'..'9' || next !in '1'..'9') return false
+                if (prev == mid || mid == next) return false
+                val pRow = (prev - '1') / 3
+                val pCol = (prev - '1') % 3
+                val mRow = (mid - '1') / 3
+                val mCol = (mid - '1') % 3
+                val nRow = (next - '1') / 3
+                val nCol = (next - '1') % 3
+                val vx1 = mCol - pCol
+                val vy1 = mRow - pRow
+                val vx2 = nCol - mCol
+                val vy2 = nRow - mRow
+                val dot = vx1 * vx2 + vy1 * vy2
+                // Acute reversal (< 0) needs >= 18ms; 90-degree turn (== 0) needs >= 34ms
+                return (dot < 0 && dwellMs >= 18L) || (dot == 0 && dwellMs >= 34L)
+            }
+
+            private fun processMovePoint(x: Float, y: Float, eventTimeMs: Long) {
+                val d = getDigitAt(x, y, strictCenter = true) ?: return
+                if (rawSwipeDigits.isEmpty() || rawSwipeDigits.last() != d) {
+                    rawSwipeDigits.append(d)
+                }
+
+                if (d == currentCandidateDigit) {
+                    if (!candidateConfirmed && eventTimeMs - candidateEnterTimeMs >= dwellThresholdMs) {
+                        candidateConfirmed = true
+                        if (lastConfirmedDigit != d) {
+                            anchorDigits.append(d)
+                            lastConfirmedDigit = d
+                            performHaptic()
+                        }
+                    }
+                } else {
+                    val prevCand = currentCandidateDigit
+                    val prevConfirmed = lastConfirmedDigit
+                    val prevDwell = eventTimeMs - candidateEnterTimeMs
+                    if (!candidateConfirmed && prevCand != null && prevConfirmed != null && prevCand != prevConfirmed) {
+                        if (shouldConfirmCornerTurn(prevConfirmed, prevCand, d, prevDwell)) {
+                            anchorDigits.append(prevCand)
+                            lastConfirmedDigit = prevCand
+                            performHaptic()
+                        }
+                    }
+                    currentCandidateDigit = d
+                    candidateEnterTimeMs = eventTimeMs
+                    candidateConfirmed = (d == lastConfirmedDigit)
+                }
             }
 
             override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
@@ -484,10 +551,16 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
                         startY = ev.y
                         isSwiping = false
                         isHorizontalSwipe = false
-                        swipeDigits.clear()
-                        lastDigit = getDigitAt(ev.x, ev.y)
-                        if (lastDigit != null) {
-                            swipeDigits.append(lastDigit)
+                        anchorDigits.clear()
+                        rawSwipeDigits.clear()
+                        val startDigit = getDigitAt(ev.x, ev.y, strictCenter = false)
+                        lastConfirmedDigit = startDigit
+                        currentCandidateDigit = startDigit
+                        candidateEnterTimeMs = ev.eventTime
+                        candidateConfirmed = true
+                        if (startDigit != null) {
+                            anchorDigits.append(startDigit)
+                            rawSwipeDigits.append(startDigit)
                         }
                         return false
                     }
@@ -515,12 +588,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
                                 hideSymbolPopupOverlay()
                                 parent?.requestDisallowInterceptTouchEvent(true)
                                 gestureTrailView.startTrail(ev.x, ev.y)
-                                val d = getDigitAt(ev.x, ev.y)
-                                if (d != null && d != lastDigit) {
-                                    swipeDigits.append(d)
-                                    lastDigit = d
-                                    performHaptic()
-                                }
+                                processMovePoint(ev.x, ev.y, ev.eventTime)
                                 return true
                             }
                         }
@@ -535,13 +603,15 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
                 when (ev.actionMasked) {
                     MotionEvent.ACTION_MOVE -> {
                         if (!isHorizontalSwipe) {
-                            gestureTrailView.addPoint(ev.x, ev.y)
-                            val d = getDigitAt(ev.x, ev.y)
-                            if (d != null && d != lastDigit) {
-                                swipeDigits.append(d)
-                                lastDigit = d
-                                performHaptic()
+                            for (hIdx in 0 until ev.historySize) {
+                                val hx = ev.getHistoricalX(hIdx)
+                                val hy = ev.getHistoricalY(hIdx)
+                                val hTime = ev.getHistoricalEventTime(hIdx)
+                                gestureTrailView.addPoint(hx, hy)
+                                processMovePoint(hx, hy, hTime)
                             }
+                            gestureTrailView.addPoint(ev.x, ev.y)
+                            processMovePoint(ev.x, ev.y, ev.eventTime)
                         }
                         return true
                     }
@@ -562,9 +632,24 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
                                 isHorizontalSwipe = false
                                 return true
                             }
-                            if (swipeDigits.length >= 2) {
+                            // Always lock in the final key where the finger lifted
+                            val endDigit = getDigitAt(ev.x, ev.y, strictCenter = false) ?: currentCandidateDigit
+                            if (endDigit != null) {
+                                if (anchorDigits.isEmpty() || anchorDigits.last() != endDigit) {
+                                    anchorDigits.append(endDigit)
+                                }
+                                if (rawSwipeDigits.isEmpty() || rawSwipeDigits.last() != endDigit) {
+                                    rawSwipeDigits.append(endDigit)
+                                }
+                            }
+                            if (anchorDigits.length >= 2 || rawSwipeDigits.length >= 2) {
                                 performStrongHaptic()
-                                listener?.onSwipeType(swipeDigits.toString())
+                                val primaryTrace = if (anchorDigits.length >= 2) {
+                                    anchorDigits.toString()
+                                } else {
+                                    rawSwipeDigits.toString()
+                                }
+                                listener?.onSwipeType(primaryTrace, rawSwipeDigits.toString())
                                 return true
                             }
                         }
