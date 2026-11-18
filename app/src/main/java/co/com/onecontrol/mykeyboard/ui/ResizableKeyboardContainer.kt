@@ -78,13 +78,14 @@ class ResizableKeyboardContainer(context: Context) : FrameLayout(context) {
         cardWrapper = FrameLayout(context).apply {
             background = cardBg
             elevation = dpToPx(8f).toFloat()
-            outlineProvider = ViewOutlineProvider.BACKGROUND
-            clipToOutline = true
-            clipChildren = true
-            clipToPadding = true
+            clipToOutline = false
+            clipChildren = false
+            clipToPadding = false
         }
 
         contentSlot = FrameLayout(context).apply {
+            clipChildren = false
+            clipToPadding = false
             layoutParams = LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT

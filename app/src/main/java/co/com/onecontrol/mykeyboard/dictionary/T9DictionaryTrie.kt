@@ -112,6 +112,16 @@ class T9DictionaryTrie(private val context: Context) {
             "gvn" to "güevón",
             "pl" to "pola"
         )
+
+        private val CHAT_SHORTCUT_DIGITS: Map<String, List<String>> by lazy {
+            val map = HashMap<String, MutableList<String>>()
+            for ((abbr, full) in CHAT_SHORTCUTS) {
+                val d = T9KeyMap.wordToDigits(abbr) ?: continue
+                val list = map.getOrPut(d) { mutableListOf() }
+                if (full !in list) list.add(full)
+            }
+            map
+        }
     }
 
     fun loadAsync(onLoaded: (() -> Unit)? = null) {
@@ -417,60 +427,57 @@ class T9DictionaryTrie(private val context: Context) {
             emptyMap()
         }
 
-        // 1. Exact digit matches re-ranked by (Frecency + N-Gram Context Boost)
+        // 1. Exact digit matches always come first, re-ranked by (Frecency + N-Gram Context Boost)
         val exactScored = queryNodeScored(root, digitSequence, nowMs, contextBoosts)
-        val skelScored = if (skelRoot != null) {
-            queryNodeScored(skelRoot, digitSequence, nowMs, contextBoosts, discount = 0.88)
-        } else {
-            emptyList()
-        }
-
-        val mergedScores = LinkedHashMap<String, Int>()
-        for ((w, score) in exactScored) {
-            mergedScores[w] = score
-        }
-        for ((w, score) in skelScored) {
-            val existing = mergedScores[w]
-            if (existing == null || score > existing) {
-                mergedScores[w] = score
-            }
-        }
-
-        // 2. If user has strong N-Gram contextual predictions that start with digitSequence (for 2+ digits),
-        // surface them early so phrases like "qué chimba" or "fin de semana" appear after 2-3 keys!
-        if (digitSequence.length >= 2 && contextBoosts.isNotEmpty()) {
-            for ((ctxWord, boost) in contextBoosts) {
-                if (ctxWord !in mergedScores) {
-                    val ctxDigits = T9KeyMap.wordToDigits(ctxWord)
-                    if (ctxDigits != null && ctxDigits.startsWith(digitSequence)) {
-                        // Scale slightly by how close the prefix is to full word length
-                        val lengthRatio = digitSequence.length.toDouble() / ctxDigits.length.toDouble()
-                        if (lengthRatio >= 0.34 || boost >= 35_000) {
-                            mergedScores[ctxWord] = (boost * lengthRatio).toInt()
-                        }
-                    }
-                }
-            }
-        }
-
-        val sortedPrimary = mergedScores.entries
-            .sortedByDescending { it.value }
-            .map { it.key }
 
         val combined = ArrayList<String>(limit)
         val seen = HashSet<String>()
-        for (w in sortedPrimary) {
+        for ((w, _) in exactScored) {
             if (seen.add(w)) {
                 combined.add(w)
                 if (combined.size >= limit) return combined
             }
         }
 
-        // 3. If still under 5 suggestions, provide completions from exact prefix subtree
-        if (combined.size < 5) {
+        // 1b. Direct chat abbreviations (e.g. xq -> porque, mk -> marica, chmb -> chimba, prc -> parce)
+        if (language == Language.ES) {
+            CHAT_SHORTCUT_DIGITS[digitSequence]?.forEach { expansion ->
+                if (seen.add(expansion)) {
+                    combined.add(expansion)
+                    if (combined.size >= limit) return combined
+                }
+            }
+        }
+
+        // 2. If user has strong N-Gram contextual predictions that start with digitSequence (for 2+ digits),
+        // surface them early so phrases like "qué chimba" or "fin de semana" appear after 2-3 keys!
+        if (digitSequence.length >= 2 && contextBoosts.isNotEmpty()) {
+            val ctxPrefixCandidates = mutableListOf<Pair<String, Int>>()
+            for ((ctxWord, boost) in contextBoosts) {
+                if (ctxWord !in seen) {
+                    val ctxDigits = T9KeyMap.wordToDigits(ctxWord)
+                    if (ctxDigits != null && ctxDigits.startsWith(digitSequence)) {
+                        val lengthRatio = digitSequence.length.toDouble() / ctxDigits.length.toDouble()
+                        if (lengthRatio >= 0.34 || boost >= 35_000) {
+                            ctxPrefixCandidates.add(ctxWord to (boost * lengthRatio).toInt())
+                        }
+                    }
+                }
+            }
+            ctxPrefixCandidates.sortByDescending { it.second }
+            for ((cw, _) in ctxPrefixCandidates) {
+                if (seen.add(cw)) {
+                    combined.add(cw)
+                    if (combined.size >= limit) return combined
+                }
+            }
+        }
+
+        // 3. Exact prefix subtree completions (surfaces verb conjugations like habl -> hablo, hablas, hablando, hablé)
+        if (combined.size < limit) {
             val node = findNode(root, digitSequence)
             if (node != null) {
-                val completions = collectSubtreeCompletions(node, 6 - combined.size, seen, nowMs, contextBoosts)
+                val completions = collectSubtreeCompletions(node, limit - combined.size, seen, nowMs, contextBoosts)
                 for (c in completions) {
                     if (seen.add(c)) {
                         combined.add(c)
@@ -480,7 +487,18 @@ class T9DictionaryTrie(private val context: Context) {
             }
         }
 
-        // 4. Fuzzy T9 fallback: if still under 3 suggestions for a 3+ digit sequence, check physical neighbor keys
+        // 4. Vowel-skipped / consonant skeleton matches & chat abbreviations (e.g. chmb -> chimba, mrc -> marica, xq -> porque)
+        if (combined.size < limit && skelRoot != null) {
+            val skelScored = queryNodeScored(skelRoot, digitSequence, nowMs, contextBoosts, discount = 0.88)
+            for ((sw, _) in skelScored) {
+                if (seen.add(sw)) {
+                    combined.add(sw)
+                    if (combined.size >= limit) return combined
+                }
+            }
+        }
+
+        // 5. Fuzzy T9 fallback: if still under 3 suggestions for a 3+ digit sequence, check physical neighbor keys
         if (combined.size < 3 && digitSequence.length >= 3) {
             val fuzzyMatches = queryFuzzyNeighbors(root, digitSequence, seen, nowMs, contextBoosts, limit - combined.size)
             for (fw in fuzzyMatches) {

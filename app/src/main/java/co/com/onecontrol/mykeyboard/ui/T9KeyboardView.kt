@@ -101,9 +101,11 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
     private val modeButton: TextView
     private val symbolsButton: TextView
     private val backspaceButton: TextView
+    private val gestureTrailView: GestureTrailView
+    private val rightCol: LinearLayout
     private var lastSuggestions: List<String> = emptyList()
 
-    // Hold & Slide popup for # (Symbols)
+    // Hold & Slide popup for all keys
     private val symbolPopupOverlay: LinearLayout
     private val symbolPopupChips = mutableListOf<TextView>()
     private var popupSelectedIndex = 0
@@ -149,6 +151,8 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
     })
 
     init {
+        clipChildren = false
+        clipToPadding = false
         layoutParams = LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
@@ -156,6 +160,8 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
 
         mainLayout = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
+            clipChildren = false
+            clipToPadding = false
             setPadding(dpToPx(6f), dpToPx(6f), dpToPx(6f), dpToPx(12f))
             layoutParams = LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -433,12 +439,12 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
         keypadRows.add(bottomRow)
         leftGrid.addView(bottomRow)
 
-        val gestureTrailView = GestureTrailView(context).apply {
+        val initialGridHeightPx = dpToPx(keyHeightDp * 4f + 15f)
+        gestureTrailView = GestureTrailView(context).apply {
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
+                initialGridHeightPx
             )
-            visibility = View.GONE
         }
 
         val leftGridContainer = object : FrameLayout(context) {
@@ -453,6 +459,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
                 val w = width.toFloat()
                 val h = height.toFloat()
                 if (w <= 0 || h <= 0) return null
+                if (x < 0f || x > w || y < 0f || y > h) return null
                 val col = (x / (w / 3f)).toInt().coerceIn(0, 2)
                 val row = (y / (h / 4f)).toInt().coerceIn(0, 3)
                 val grid = arrayOf(
@@ -496,6 +503,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
                         if (abs(dx) > dpToPx(32f) && abs(dx) > abs(dy) * 1.4f) {
                             isHorizontalSwipe = true
                             isSwiping = true
+                            hideSymbolPopupOverlay()
                             parent?.requestDisallowInterceptTouchEvent(true)
                             return true
                         }
@@ -504,6 +512,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
                         if (currentInputMode == InputMode.T9_ES || currentInputMode == InputMode.T9_EN) {
                             if (dist > dpToPx(18f)) {
                                 isSwiping = true
+                                hideSymbolPopupOverlay()
                                 parent?.requestDisallowInterceptTouchEvent(true)
                                 gestureTrailView.startTrail(ev.x, ev.y)
                                 val d = getDigitAt(ev.x, ev.y)
@@ -573,10 +582,10 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
         leftGridContainer.addView(gestureTrailView)
         body.addView(leftGridContainer)
 
-        // Right Action Column
-        val rightCol = LinearLayout(context).apply {
+        // Right Action Column (explicitly matched to 4-row keypad height so it never expands to full screen)
+        rightCol = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+            layoutParams = LinearLayout.LayoutParams(0, initialGridHeightPx, 1f)
         }
 
         // Backspace: Tap deletes char; Swipe Left deletes whole word; Hold > 280ms deletes words repeatedly!
@@ -755,11 +764,17 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
             keyView.parent?.requestDisallowInterceptTouchEvent(true)
             performHaptic()
             val options = getSlideOptionsForKey(digit, currentCaseMode)
+            // Always position the popup 1 full row ABOVE the pressed key (just like # does!)
+            // so the user's thumb/finger never covers the letters:
+            // - Row 3 (#): floats over Row 2 (keyHeightDp * 1f + 18f)
+            // - Row 2 (7,8,9): floats over Row 1 (keyHeightDp * 2f + 22f)
+            // - Row 1 (4,5,6): floats over Row 0 (keyHeightDp * 3f + 26f)
+            // - Row 0 (1,2,3): floats over Top Bar (keyHeightDp * 4f + 22f)
             val rowMargin = when (digit) {
-                '1', '2', '3' -> dpToPx(keyHeightDp * 3f + 10f)
-                '4', '5', '6' -> dpToPx(keyHeightDp * 2f + 10f)
-                '7', '8', '9' -> dpToPx(keyHeightDp * 1f + 10f)
-                else -> dpToPx(60f)
+                '1', '2', '3' -> dpToPx(keyHeightDp * 4f + 22f)
+                '4', '5', '6' -> dpToPx(keyHeightDp * 3f + 26f)
+                '7', '8', '9' -> dpToPx(keyHeightDp * 2f + 22f)
+                else -> dpToPx(keyHeightDp * 1f + 18f)
             }
             showSymbolPopupOverlay(options, rowMargin)
         }
@@ -896,19 +911,32 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
             symbolPopupOverlay.layoutParams = lp
         }
 
+        val isCompactLetterStrip = options.size <= 6
         options.forEachIndexed { index, sym ->
             val tv = TextView(context).apply {
                 text = sym
                 setTextColor(Color.WHITE)
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, if (sym == "😊") 18f else 16f)
+                setTextSize(
+                    TypedValue.COMPLEX_UNIT_SP,
+                    when {
+                        sym == "😊" -> 18f
+                        isCompactLetterStrip -> 18f
+                        else -> 16f
+                    }
+                )
                 typeface = Typeface.DEFAULT_BOLD
                 gravity = Gravity.CENTER
                 includeFontPadding = false
-                val hPad = if (sym.length > 1) dpToPx(7f) else dpToPx(11f)
-                setPadding(hPad, dpToPx(7f), hPad, dpToPx(7f))
+                val hPad = when {
+                    sym.length > 1 -> dpToPx(8f)
+                    isCompactLetterStrip -> dpToPx(14f)
+                    else -> dpToPx(10f)
+                }
+                val vPad = if (isCompactLetterStrip) dpToPx(9f) else dpToPx(7f)
+                setPadding(hPad, vPad, hPad, vPad)
                 background = GradientDrawable().apply {
                     setColor(if (index == 0) ContextCompat.getColor(context, R.color.kb_accent) else Color.TRANSPARENT)
-                    cornerRadius = dpToPx(8f).toFloat()
+                    cornerRadius = dpToPx(10f).toFloat()
                 }
             }
             symbolPopupChips.add(tv)
@@ -918,6 +946,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
         popupSelectedIndex = 0
         updateChipHighlights()
         symbolPopupOverlay.visibility = View.VISIBLE
+        symbolPopupOverlay.bringToFront()
     }
 
     private fun hideSymbolPopupOverlay() {
@@ -953,9 +982,13 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
             if (i == popupSelectedIndex) {
                 bg.setColor(ContextCompat.getColor(context, R.color.kb_accent))
                 chip.setTextColor(Color.WHITE)
+                chip.scaleX = 1.15f
+                chip.scaleY = 1.15f
             } else {
                 bg.setColor(Color.TRANSPARENT)
                 chip.setTextColor(ContextCompat.getColor(context, R.color.kb_text_primary))
+                chip.scaleX = 1.0f
+                chip.scaleY = 1.0f
             }
         }
     }
@@ -989,12 +1022,19 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
             KeyboardConfig.MAX_KEY_HEIGHT_DP
         )
         val heightPx = dpToPx(keyHeightDp.toFloat())
+        val totalGridHeightPx = heightPx * 4 + dpToPx(15f)
         keypadRows.forEach { row ->
             val lp = row.layoutParams as LinearLayout.LayoutParams
             if (lp.height != heightPx) {
                 lp.height = heightPx
                 row.layoutParams = lp
             }
+        }
+        gestureTrailView.layoutParams = gestureTrailView.layoutParams.apply {
+            height = totalGridHeightPx
+        }
+        rightCol.layoutParams = rightCol.layoutParams.apply {
+            height = totalGridHeightPx
         }
         calcKeypadRows.forEach { row ->
             val lp = row.layoutParams as? LinearLayout.LayoutParams

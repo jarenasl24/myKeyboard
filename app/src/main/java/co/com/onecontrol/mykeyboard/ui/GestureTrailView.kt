@@ -3,7 +3,6 @@ package co.com.onecontrol.mykeyboard.ui
 import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Canvas
-import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PointF
@@ -22,6 +21,11 @@ class GestureTrailView @JvmOverloads constructor(
     private val points = mutableListOf<PointF>()
     private var trailAlpha = 220
     private var fadeAnimator: ValueAnimator? = null
+
+    init {
+        isClickable = false
+        isFocusable = false
+    }
 
     private val trailPaint = Paint().apply {
         isAntiAlias = true
@@ -49,28 +53,31 @@ class GestureTrailView @JvmOverloads constructor(
         trailGlowPaint.alpha = 70
         points.clear()
         trailPath.reset()
-        points.add(PointF(x, y))
-        trailPath.moveTo(x, y)
-        visibility = VISIBLE
+        val cx = x.coerceIn(0f, width.toFloat().coerceAtLeast(1f))
+        val cy = y.coerceIn(0f, height.toFloat().coerceAtLeast(1f))
+        points.add(PointF(cx, cy))
+        trailPath.moveTo(cx, cy)
         invalidate()
     }
 
     fun addPoint(x: Float, y: Float) {
+        val cx = x.coerceIn(0f, width.toFloat().coerceAtLeast(1f))
+        val cy = y.coerceIn(0f, height.toFloat().coerceAtLeast(1f))
         if (points.isEmpty()) {
-            startTrail(x, y)
+            startTrail(cx, cy)
             return
         }
         val prev = points.last()
-        val midX = (prev.x + x) / 2f
-        val midY = (prev.y + y) / 2f
+        val midX = (prev.x + cx) / 2f
+        val midY = (prev.y + cy) / 2f
         trailPath.quadTo(prev.x, prev.y, midX, midY)
-        points.add(PointF(x, y))
+        points.add(PointF(cx, cy))
         invalidate()
     }
 
     fun finishTrail() {
         if (points.isEmpty()) {
-            visibility = GONE
+            invalidate()
             return
         }
         fadeAnimator?.cancel()
@@ -85,7 +92,7 @@ class GestureTrailView @JvmOverloads constructor(
             doOnEnd {
                 points.clear()
                 trailPath.reset()
-                visibility = GONE
+                invalidate()
             }
             start()
         }
