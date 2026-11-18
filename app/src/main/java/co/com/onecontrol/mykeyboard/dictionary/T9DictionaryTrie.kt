@@ -686,7 +686,7 @@ class T9DictionaryTrie(private val context: Context) {
 
         val swipeRoot = swipeRoots[language] ?: return emptyList()
         val nowMs = System.currentTimeMillis()
-        val contextBoosts = nextWordPredictor.getContextualBoostMap(language.code, prevWord2, prevWord1)
+        val contextBoosts = NextWordPredictor.getContextualBoostMap(language.code, prevWord2, prevWord1)
 
         val candidates = LinkedHashSet<String>()
 
