@@ -474,19 +474,27 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
         val ic = currentInputConnection ?: return
         if (inputMode != InputMode.T9_ES && inputMode != InputMode.T9_EN) return
         if (digits.length < 2) return
-        commitT9Composing(ic, learn = true)
-        t9Engine.clear()
-        for (ch in digits) {
-            t9Engine.appendDigit(ch)
-        }
-        val topWord = t9Engine.getPrimarySuggestion(inputMode.toLanguage(), caseMode)
-        if (topWord != null) {
-            ic.commitText("$topWord ", 1)
-            t9Engine.learnWord(inputMode.toLanguage(), topWord)
-            t9Engine.clear()
+
+        val matches = dictionary.querySwipe(inputMode.toLanguage(), digits, limit = 8)
+        if (matches.isNotEmpty()) {
+            commitAllComposing()
+            val bestWord = caseMode.applyToWord(matches.first())
+            val mappedMatches = matches.map { caseMode.applyToWord(it) }
+            ic.commitText("$bestWord ", 1)
+            lastCommittedWord = bestWord
+            dictionary.learnWord(inputMode.toLanguage(), matches.first())
             applyAutoCapIfSentenceEnd(ic)
-            refreshT9Suggestions()
+            keyboardView?.showSuggestions(
+                suggestions = mappedMatches,
+                hasPendingDigits = false,
+                digits = ""
+            )
         } else {
+            commitT9Composing(ic, learn = true)
+            t9Engine.clear()
+            for (ch in digits) {
+                t9Engine.appendDigit(ch)
+            }
             refreshT9Suggestions()
         }
     }
@@ -580,24 +588,40 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
     }
 
     override fun onSwitchImeRequested() {
-        val switched = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
-            try {
-                switchToNextInputMethod(false)
-            } catch (_: Exception) {
-                false
-            }
-        } else {
-            false
-        }
-        if (!switched) {
-            val imm = getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager
-            imm?.showInputMethodPicker()
-        }
+        switchToSwiftKeyOrPicker()
     }
 
     override fun onShowImePickerRequested() {
+        switchToSwiftKeyOrPicker()
+    }
+
+    private fun switchToSwiftKeyOrPicker() {
         val imm = getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager
-        imm?.showInputMethodPicker()
+        try {
+            val swiftKey = imm?.enabledInputMethodList?.firstOrNull {
+                it.packageName.contains("swiftkey", ignoreCase = true)
+            }
+            if (swiftKey != null) {
+                switchInputMethod(swiftKey.id)
+                return
+            }
+        } catch (_: Exception) {
+            // fallback
+        }
+
+        try {
+            if (switchToPreviousInputMethod()) {
+                return
+            }
+        } catch (_: Exception) {
+            // fallback
+        }
+
+        try {
+            imm?.showInputMethodPicker()
+        } catch (_: Exception) {
+            // ignore
+        }
     }
 
     override fun onDirectCommit(text: String) {

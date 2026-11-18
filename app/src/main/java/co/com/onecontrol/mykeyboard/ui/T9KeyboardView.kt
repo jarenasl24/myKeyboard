@@ -72,7 +72,6 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
     private var keyHeightDp: Int = KeyboardConfig.DEFAULT_KEY_HEIGHT_DP
     private var currentInputMode: InputMode = InputMode.T9_ES
     private var currentCaseMode: CaseMode = CaseMode.CAPITALIZE
-
     private var activePopup: android.widget.PopupWindow? = null
     private var isCalculatorActive = false
     private var calcExpression = ""
@@ -381,21 +380,8 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
                 }
             }
             rowItems.forEach { (digit, sub) ->
-                var keyViewRef: View? = null
-                val key = createNumericKey(
-                    mainLabel = digit.toString(),
-                    subLabel = sub,
-                    onClick = {
-                        performHaptic()
-                        listener?.onDigitKey(digit)
-                    },
-                    onLongClick = {
-                        performHaptic()
-                        keyViewRef?.let { anchor -> showKeyOptions(digit, anchor) }
-                        true
-                    }
-                )
-                keyViewRef = key
+                val key = createNumericKey(digit.toString(), sub)
+                setupKeySlideToSelect(key, digit)
                 keyViews.add(key)
                 row.addView(key, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
                     marginEnd = dpToPx(5f)
@@ -438,7 +424,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
 
         // Key #: Dedicated to Symbols with Hold & Slide Selector!
         val hashKey = createNumericKey("#", "SÍM / @")
-        setupHashSlideToSelect(hashKey)
+        setupKeySlideToSelect(hashKey, '#')
         keyViews.add(hashKey)
         bottomRow.addView(hashKey, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
             marginEnd = dpToPx(5f)
@@ -741,44 +727,50 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
                 bottomMargin = dpToPx(60f)
             }
         }
-
-        T9KeyMap.POPUP_SYMBOLS.forEachIndexed { index, sym ->
-            val tv = TextView(context).apply {
-                text = sym
-                setTextColor(Color.WHITE)
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, if (sym == "😊") 18f else 15f)
-                typeface = Typeface.DEFAULT_BOLD
-                gravity = Gravity.CENTER
-                includeFontPadding = false
-                setPadding(dpToPx(8f), dpToPx(6f), dpToPx(8f), dpToPx(6f))
-                background = GradientDrawable().apply {
-                    setColor(if (index == 0) ContextCompat.getColor(context, R.color.kb_accent) else Color.TRANSPARENT)
-                    cornerRadius = dpToPx(8f).toFloat()
-                }
-            }
-            symbolPopupChips.add(tv)
-            symbolPopupOverlay.addView(tv)
-        }
         addView(symbolPopupOverlay)
     }
 
-    // --- Key # (Symbols): Tap = symbols strip, Hold & Slide = symbol popup ---
-    private fun setupHashSlideToSelect(hashKey: View) {
+    private fun getSlideOptionsForKey(digit: Char, caseMode: CaseMode): List<String> {
+        val isUpper = (caseMode == CaseMode.UPPER || caseMode == CaseMode.CAPITALIZE)
+        return when (digit) {
+            '1' -> listOf(".", ",", "?", "!", "@", "1", "'", "-", ":", "/")
+            '2' -> if (isUpper) listOf("A", "B", "C", "Á", "2") else listOf("a", "b", "c", "á", "2")
+            '3' -> if (isUpper) listOf("D", "E", "F", "É", "3") else listOf("d", "e", "f", "é", "3")
+            '4' -> if (isUpper) listOf("G", "H", "I", "Í", "4") else listOf("g", "h", "i", "í", "4")
+            '5' -> if (isUpper) listOf("J", "K", "L", "5") else listOf("j", "k", "l", "5")
+            '6' -> if (isUpper) listOf("M", "N", "O", "Ñ", "Ó", "6") else listOf("m", "n", "o", "ñ", "ó", "6")
+            '7' -> if (isUpper) listOf("P", "Q", "R", "S", "7") else listOf("p", "q", "r", "s", "7")
+            '8' -> if (isUpper) listOf("T", "U", "V", "Ú", "Ü", "8") else listOf("t", "u", "v", "ú", "ü", "8")
+            '9' -> if (isUpper) listOf("W", "X", "Y", "Z", "9") else listOf("w", "x", "y", "z", "9")
+            '#' -> T9KeyMap.POPUP_SYMBOLS
+            else -> listOf(digit.toString())
+        }
+    }
+
+    // --- Hold & Slide Selector for all keys (like #): Hold 250ms -> Slide to pick letter/symbol -> Release to commit! ---
+    private fun setupKeySlideToSelect(keyView: View, digit: Char) {
         var isLongPressActive = false
         val longPressRunnable = Runnable {
             isLongPressActive = true
             performHaptic()
-            showSymbolPopupOverlay()
+            val options = getSlideOptionsForKey(digit, currentCaseMode)
+            val rowMargin = when (digit) {
+                '1', '2', '3' -> dpToPx(keyHeightDp * 3f + 10f)
+                '4', '5', '6' -> dpToPx(keyHeightDp * 2f + 10f)
+                '7', '8', '9' -> dpToPx(keyHeightDp * 1f + 10f)
+                else -> dpToPx(60f)
+            }
+            showSymbolPopupOverlay(options, rowMargin)
         }
 
-        hashKey.setOnTouchListener { v, event ->
+        keyView.setOnTouchListener { v, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     isLongPressActive = false
                     v.isPressed = true
                     v.parent?.requestDisallowInterceptTouchEvent(true)
                     repeatHandler.removeCallbacks(longPressRunnable)
-                    repeatHandler.postDelayed(longPressRunnable, 320L)
+                    repeatHandler.postDelayed(longPressRunnable, 250L)
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
@@ -797,13 +789,17 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
                             performHaptic()
                             showEmojiPanel()
                         } else if (selected != null) {
-                            performHaptic()
+                            performStrongHaptic()
                             listener?.onSymbolSelected(selected)
                         }
                     } else {
-                        // Quick tap on #: inserts '#' directly into text!
+                        // Quick tap on digit: normal typing!
                         performHaptic()
-                        listener?.onSymbolSelected("#")
+                        if (digit == '#') {
+                            listener?.onSymbolSelected("#")
+                        } else {
+                            listener?.onDigitKey(digit)
+                        }
                     }
                     true
                 }
@@ -888,7 +884,34 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
         }
     }
 
-    private fun showSymbolPopupOverlay() {
+    private fun showSymbolPopupOverlay(options: List<String>, rowMargin: Int) {
+        symbolPopupOverlay.removeAllViews()
+        symbolPopupChips.clear()
+
+        (symbolPopupOverlay.layoutParams as? LayoutParams)?.let { lp ->
+            lp.bottomMargin = rowMargin
+            symbolPopupOverlay.layoutParams = lp
+        }
+
+        options.forEachIndexed { index, sym ->
+            val tv = TextView(context).apply {
+                text = sym
+                setTextColor(Color.WHITE)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, if (sym == "😊") 18f else 16f)
+                typeface = Typeface.DEFAULT_BOLD
+                gravity = Gravity.CENTER
+                includeFontPadding = false
+                val hPad = if (sym.length > 1) dpToPx(7f) else dpToPx(11f)
+                setPadding(hPad, dpToPx(7f), hPad, dpToPx(7f))
+                background = GradientDrawable().apply {
+                    setColor(if (index == 0) ContextCompat.getColor(context, R.color.kb_accent) else Color.TRANSPARENT)
+                    cornerRadius = dpToPx(8f).toFloat()
+                }
+            }
+            symbolPopupChips.add(tv)
+            symbolPopupOverlay.addView(tv)
+        }
+
         popupSelectedIndex = 0
         updateChipHighlights()
         symbolPopupOverlay.visibility = View.VISIBLE

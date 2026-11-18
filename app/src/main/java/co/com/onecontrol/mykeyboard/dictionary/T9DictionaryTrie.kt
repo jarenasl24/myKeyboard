@@ -290,6 +290,70 @@ class T9DictionaryTrie(private val context: Context) {
         return results.map { it.word }.distinct().take(limit)
     }
 
+    fun querySwipe(language: Language, traceDigits: String, limit: Int = 8): List<String> {
+        if (traceDigits.length < 2) return emptyList()
+        val root = roots[language] ?: return emptyList()
+        val firstDigit = traceDigits.first()
+        val lastDigit = traceDigits.last()
+        val firstIdx = firstDigit - '2'
+        if (firstIdx !in 0..7) return emptyList()
+        val firstNode = root.children[firstIdx] ?: return emptyList()
+
+        val results = mutableListOf<WordEntry>()
+        searchSwipeNode(firstNode, traceDigits, 1, lastDigit, results, maxLimit = limit * 4)
+
+        // Also check skeleton roots for vowel-skipped swipe matches
+        skeletonRoots[language]?.children?.get(firstIdx)?.let { skelFirst ->
+            searchSwipeNode(skelFirst, traceDigits, 1, lastDigit, results, maxLimit = limit * 4)
+        }
+
+        results.sortByDescending { it.frequency }
+        return results.map { it.word }.distinct().take(limit)
+    }
+
+    private fun searchSwipeNode(
+        node: TrieNode,
+        trace: String,
+        traceIdx: Int,
+        lastDigit: Char,
+        results: MutableList<WordEntry>,
+        maxLimit: Int
+    ) {
+        if (results.size >= maxLimit) return
+
+        synchronized(node.words) {
+            for (w in node.words) {
+                if (w.word.length >= 2) {
+                    val wDigits = T9KeyMap.wordToDigits(w.word)
+                    if (wDigits != null && wDigits.last() == lastDigit) {
+                        results.add(w)
+                    }
+                }
+            }
+        }
+
+        for (idx in 0..7) {
+            val child = node.children[idx] ?: continue
+            val childDigit = ('2' + idx)
+
+            var nextTraceIdx = -1
+            if (traceIdx > 0 && trace[traceIdx - 1] == childDigit) {
+                nextTraceIdx = traceIdx
+            } else {
+                for (ti in traceIdx until trace.length) {
+                    if (trace[ti] == childDigit) {
+                        nextTraceIdx = ti + 1
+                        break
+                    }
+                }
+            }
+
+            if (nextTraceIdx != -1) {
+                searchSwipeNode(child, trace, nextTraceIdx, lastDigit, results, maxLimit)
+            }
+        }
+    }
+
     fun learnWord(language: Language, word: String) {
         val clean = word.trim().lowercase()
         if (clean.length < 2) return
