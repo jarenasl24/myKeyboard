@@ -64,6 +64,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
         fun onShortcutSelected(expansion: String)
         fun onShortcutsRequested()
         fun onDirectCommit(text: String)
+        fun onCloseKeyboardRequested()
     }
 
     var listener: Listener? = null
@@ -92,6 +93,7 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
     private val utilityControlsLayout: LinearLayout
     private val langPill: TextView
     private val expandButton: TextView
+    private val closeButton: TextView
     private val statusBadge: TextView
     private val clipboardButton: TextView
     private val emojiButton: TextView
@@ -302,7 +304,22 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
             }
         }
         utilityControlsLayout.addView(resizeButton)
-        topBar.addView(utilityControlsLayout)
+        topBar.addView(utilityControlsLayout, marginEndParams(4))
+
+        // Direct button to close/dismiss keyboard easily and quickly (always accessible on topBar)
+        closeButton = createTopChip("✕").apply {
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(ContextCompat.getColor(context, R.color.kb_text_secondary))
+            setPadding(dpToPx(9f), dpToPx(4.5f), dpToPx(9f), dpToPx(4.5f))
+            contentDescription = "Cerrar teclado"
+            setOnClickListener {
+                performHaptic()
+                hideActivePopups()
+                listener?.onCloseKeyboardRequested()
+            }
+        }
+        topBar.addView(closeButton)
         mainLayout.addView(topBar)
 
         // Candidate Grid Panel (expanded view of all alternative words)
@@ -757,6 +774,12 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
                 performHaptic()
                 listener?.onEnterKey()
             }
+            setOnLongClickListener {
+                performStrongHaptic()
+                hideActivePopups()
+                listener?.onCloseKeyboardRequested()
+                true
+            }
         }
         actionButtons.add(enterButton)
         rightCol.addView(enterButton, LinearLayout.LayoutParams(
@@ -787,6 +810,11 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
 
                 override fun onCloseEmojiPanel() {
                     hideEmojiPanel()
+                }
+
+                override fun onCloseKeyboard() {
+                    hideEmojiPanel()
+                    this@T9KeyboardView.listener?.onCloseKeyboardRequested()
                 }
 
                 override fun onBackspace() {
@@ -1083,6 +1111,13 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
         return symbolPopupChips.getOrNull(popupSelectedIndex)?.text?.toString()
     }
 
+    fun hideActivePopups() {
+        activePopup?.dismiss()
+        activePopup = null
+        hideSymbolPopupOverlay()
+        hideCandidateGrid()
+    }
+
     override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
         if (swipeDetector.onTouchEvent(ev)) {
             return true
@@ -1364,14 +1399,14 @@ class T9KeyboardView(context: Context) : FrameLayout(context) {
         langPill.visibility = View.GONE
         hideCandidateGrid()
         suggestionContainer.removeAllViews()
-        val closeChip = createSuggestionChip("✕", primary = false) {
+        val backChip = createSuggestionChip("←", primary = false) {
             performHaptic()
             utilityControlsLayout.visibility = View.VISIBLE
             langPill.visibility = View.VISIBLE
             showSuggestions(emptyList(), false, "")
         }
-        suggestionContainer.addView(closeChip, marginEndParams(6))
-        return closeChip
+        suggestionContainer.addView(backChip, marginEndParams(6))
+        return backChip
     }
 
     fun showModePickerStrip() {

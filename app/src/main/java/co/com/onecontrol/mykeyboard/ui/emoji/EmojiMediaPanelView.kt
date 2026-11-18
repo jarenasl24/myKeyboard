@@ -31,6 +31,7 @@ class EmojiMediaPanelView(context: Context) : LinearLayout(context) {
         fun onKaomojiSelected(kaomoji: String)
         fun onGifSelected(assetName: String, label: String)
         fun onCloseEmojiPanel()
+        fun onCloseKeyboard()
         fun onBackspace()
         fun onSpace()
     }
@@ -528,7 +529,24 @@ class EmojiMediaPanelView(context: Context) : LinearLayout(context) {
                 listener?.onBackspace()
             }
         }
-        bottomBar.addView(backspaceBtn, LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1.2f))
+        bottomBar.addView(backspaceBtn, LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1.2f).apply {
+            marginEnd = dpToPx(6f)
+        })
+
+        // 4. Close keyboard button
+        val closeBtn = TextView(context).apply {
+            text = "✕"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(ContextCompat.getColor(context, R.color.kb_text_secondary))
+            gravity = Gravity.CENTER
+            background = createKeyBackground()
+            setOnClickListener {
+                performHaptic()
+                listener?.onCloseKeyboard()
+            }
+        }
+        bottomBar.addView(closeBtn, LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.9f))
     }
 
     private fun createKeyBackground(): StateListDrawable {

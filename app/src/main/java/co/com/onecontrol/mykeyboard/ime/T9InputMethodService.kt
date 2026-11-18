@@ -807,6 +807,12 @@ class T9InputMethodService : InputMethodService(), T9KeyboardView.Listener {
         refreshT9Suggestions()
     }
 
+    override fun onCloseKeyboardRequested() {
+        clearAutoCommitUndoState()
+        commitAllComposing()
+        requestHideSelf(0)
+    }
+
     override fun onGifSelected(assetName: String, label: String) {
         commitGif(assetName, label)
     }
